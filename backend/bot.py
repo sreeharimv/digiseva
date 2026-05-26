@@ -262,7 +262,7 @@ def _build_list(services) -> str:
 
         for s in sorted(items, key=item_sort):
             st = _status(s)
-            status_icon = {"paid": "✅", "pending": "⏳", "overdue": "🔴", "upcoming": "⬜"}.get(st, "⬜")
+            status_icon = {"paid": "✅", "pending": "⏳", "overdue": "🔴", "upcoming": "🔵"}.get(st, "🔵")
 
             # amount label
             cycle_short = {"monthly": "/mo", "yearly": "/yr", "weekly": "/wk",
