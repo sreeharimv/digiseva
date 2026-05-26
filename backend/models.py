@@ -7,7 +7,7 @@ import uuid
 ServiceType = Literal["subscription", "bill"]
 SubscriptionCategory = Literal["OTT", "Cloud", "AI", "Telecom", "Domain", "VPN", "Software", "Other"]
 BillCategory = Literal["Electricity", "FTTH", "LPG", "DTH", "Water", "Maintenance", "Other"]
-Cycle = Literal["weekly", "monthly", "quarterly", "half-yearly", "yearly", "one-time"]
+Cycle = Literal["weekly", "monthly", "bi-monthly", "quarterly", "half-yearly", "yearly", "one-time"]
 
 
 class Service(BaseModel):

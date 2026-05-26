@@ -23,6 +23,7 @@ CAT_EMOJI = {
 def _monthly_equiv(s) -> float:
     if s.cycle == "monthly":      return s.amount
     if s.cycle == "weekly":       return s.amount * 4
+    if s.cycle == "bi-monthly":   return s.amount / 2
     if s.cycle == "quarterly":    return s.amount / 3
     if s.cycle == "half-yearly":  return s.amount / 6
     if s.cycle == "yearly":       return s.amount / 12
@@ -265,7 +266,8 @@ def _build_list(services) -> str:
 
             # amount label
             cycle_short = {"monthly": "/mo", "yearly": "/yr", "weekly": "/wk",
-                           "quarterly": "/qtr", "half-yearly": "/6mo", "one-time": ""}.get(s.cycle, "")
+                           "bi-monthly": "/2mo", "quarterly": "/qtr",
+                           "half-yearly": "/6mo", "one-time": ""}.get(s.cycle, "")
             amt = f"₹{s.amount:,.0f}{cycle_short}"
 
             # due label

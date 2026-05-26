@@ -138,6 +138,8 @@ def summary():
             monthly_total += s.amount
         elif s.cycle == "weekly":
             monthly_total += s.amount * 4
+        elif s.cycle == "bi-monthly":
+            monthly_total += s.amount / 2
         elif s.cycle == "quarterly":
             monthly_total += s.amount / 3
         elif s.cycle == "half-yearly":

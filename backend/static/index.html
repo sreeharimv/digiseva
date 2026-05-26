@@ -479,6 +479,7 @@
           <select id="form-cycle" required>
             <option value="monthly">Monthly</option>
             <option value="weekly">Weekly</option>
+            <option value="bi-monthly">Bi-Monthly (Every 2 Months)</option>
             <option value="quarterly">Quarterly</option>
             <option value="half-yearly">Half-Yearly</option>
             <option value="yearly">Yearly</option>
@@ -654,6 +655,7 @@
       let monthly = 0;
       if (s.cycle === 'monthly') monthly = s.amount;
       else if (s.cycle === 'weekly') monthly = s.amount * 4;
+      else if (s.cycle === 'bi-monthly') monthly = s.amount / 2;
       else if (s.cycle === 'quarterly') monthly = s.amount / 3;
       else if (s.cycle === 'half-yearly') monthly = s.amount / 6;
       else if (s.cycle === 'yearly') monthly = s.amount / 12;

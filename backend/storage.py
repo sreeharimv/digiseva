@@ -98,6 +98,13 @@ def advance_next_due(service: Service) -> str:
         import calendar
         day = min(current.day, calendar.monthrange(year, month)[1])
         next_due = date(year, month, day)
+    elif cycle == "bi-monthly":
+        month = current.month + 2
+        year = current.year + (month - 1) // 12
+        month = ((month - 1) % 12) + 1
+        import calendar
+        day = min(current.day, calendar.monthrange(year, month)[1])
+        next_due = date(year, month, day)
     elif cycle == "quarterly":
         month = current.month + 3
         year = current.year + (month - 1) // 12
