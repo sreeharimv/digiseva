@@ -10,6 +10,15 @@ _pending_paid_session: dict = {}
 
 DIV = "─" * 22
 
+CAT_EMOJI = {
+    # subscriptions
+    "OTT": "🎬", "Cloud": "☁️", "AI": "🤖", "Telecom": "📡",
+    "Domain": "🌐", "VPN": "🔒", "Software": "💻", "Other": "📦",
+    # bills
+    "Electricity": "⚡", "FTTH": "🌐", "LPG": "🔥", "DTH": "📺",
+    "Water": "💧", "Maintenance": "🔧",
+}
+
 
 def _monthly_equiv(s) -> float:
     if s.cycle == "monthly":      return s.amount
@@ -220,11 +229,72 @@ def _build_paid_prompt(services) -> tuple[str, dict]:
     return "\n".join(lines).strip(), index_map
 
 
+# ── /list ─────────────────────────────────────────────────────
+def _build_list(services) -> str:
+    from collections import defaultdict
+    today = date.today()
+    active = [s for s in services if s.active]
+
+    # group by category, preserve insertion order within each
+    by_cat: dict = defaultdict(list)
+    for s in active:
+        by_cat[s.category].append(s)
+
+    # sort categories: subscriptions first (by total amount desc), then bills
+    def cat_sort_key(cat_services):
+        first = cat_services[0]
+        type_order = 0 if first.type == "subscription" else 1
+        total = sum(s.amount for s in cat_services)
+        return (type_order, -total)
+
+    lines = [f"📋 *All Services*  ({len(active)} total)", DIV, ""]
+
+    for cat, items in sorted(by_cat.items(), key=lambda x: cat_sort_key(x[1])):
+        icon = CAT_EMOJI.get(cat, "📌")
+        lines.append(f"{icon} *{cat}* ({len(items)})")
+
+        # sort within category: overdue → pending → upcoming → paid
+        def item_sort(s):
+            st = _status(s)
+            order = {"overdue": 0, "pending": 1, "upcoming": 2, "paid": 3}
+            return (order.get(st, 9), s.next_due)
+
+        for s in sorted(items, key=item_sort):
+            st = _status(s)
+            status_icon = {"paid": "✅", "pending": "⏳", "overdue": "🔴", "upcoming": "⬜"}.get(st, "⬜")
+
+            # amount label
+            cycle_short = {"monthly": "/mo", "yearly": "/yr", "weekly": "/wk",
+                           "quarterly": "/qtr", "half-yearly": "/6mo", "one-time": ""}.get(s.cycle, "")
+            amt = f"₹{s.amount:,.0f}{cycle_short}"
+
+            # due label
+            due = _try_date(s.next_due)
+            due_str = due.strftime("%-d %b %Y") if due != date.max else s.next_due
+            if st == "paid":
+                due_label = f"next {due_str}"
+            elif st == "overdue":
+                days = (today - due).days
+                due_label = f"overdue {days}d"
+            elif st == "pending":
+                days = (due - today).days
+                due_label = f"due {'today' if days == 0 else f'in {days}d'}"
+            else:
+                due_label = f"due {due_str}"
+
+            lines.append(f"  {status_icon} {s.name}  •  {amt}  •  {due_label}")
+
+        lines.append("")
+
+    return "\n".join(lines).strip()
+
+
 # ── Help text ──────────────────────────────────────────────────
 HELP_TEXT = f"""\
 🤖 *DigiSeva Commands*
 {DIV}
 /summary — Overview & status
+/list — All services by category
 /due — Items due in next 7 days
 /overdue — Unpaid overdue items
 /paid — Mark an item as paid
@@ -246,6 +316,10 @@ async def cmd_due(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_overdue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import load_services
     await update.message.reply_text(_build_overdue(load_services()), parse_mode="Markdown")
+
+async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from storage import load_services
+    await update.message.reply_text(_build_list(load_services()), parse_mode="Markdown")
 
 async def cmd_monthly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import load_services
@@ -305,7 +379,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"\n"
         f"{DIV}\n"
         f"*Commands*\n"
-        f"/summary  /due  /overdue\n"
+        f"/summary  /list  /due  /overdue\n"
         f"/paid  /monthly  /export\n"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
@@ -359,6 +433,7 @@ def create_bot_app(token: str) -> Application:
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start",   cmd_start))
     app.add_handler(CommandHandler("summary", cmd_summary))
+    app.add_handler(CommandHandler("list",    cmd_list))
     app.add_handler(CommandHandler("due",     cmd_due))
     app.add_handler(CommandHandler("overdue", cmd_overdue))
     app.add_handler(CommandHandler("paid",    cmd_paid))
