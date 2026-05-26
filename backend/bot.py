@@ -1,173 +1,323 @@
 import logging
-import os
 from datetime import date, timedelta
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 logger = logging.getLogger(__name__)
 
-_pending_paid_session: dict = {}  # chat_id -> list of pending service names
+# chat_id -> {index: service_id}
+_pending_paid_session: dict = {}
+
+DIV = "─" * 22
 
 
-def _build_summary_text(services) -> str:
+def _monthly_equiv(s) -> float:
+    if s.cycle == "monthly":      return s.amount
+    if s.cycle == "weekly":       return s.amount * 4
+    if s.cycle == "quarterly":    return s.amount / 3
+    if s.cycle == "half-yearly":  return s.amount / 6
+    if s.cycle == "yearly":       return s.amount / 12
+    return 0.0
+
+
+def _status(s) -> str:
+    if s.paid_current_cycle:
+        return "paid"
     today = date.today()
-    seven_days = today + timedelta(days=7)
-    monthly_total = 0.0
-    pending = []
-    overdue = []
+    try:
+        due = date.fromisoformat(s.next_due)
+    except ValueError:
+        return "unknown"
+    diff = (due - today).days
+    if diff < 0:   return "overdue"
+    if diff <= 7:  return "pending"
+    return "upcoming"
 
-    for s in services:
-        if not s.active:
-            continue
-        if s.cycle == "monthly":
-            monthly_total += s.amount
-        elif s.cycle == "weekly":
-            monthly_total += s.amount * 4
-        elif s.cycle == "quarterly":
-            monthly_total += s.amount / 3
-        elif s.cycle == "half-yearly":
-            monthly_total += s.amount / 6
-        elif s.cycle == "yearly":
-            monthly_total += s.amount / 12
 
-        if s.paid_current_cycle:
-            continue
-        try:
-            due = date.fromisoformat(s.next_due)
-        except ValueError:
-            continue
-        if due < today:
-            overdue.append(s)
-        elif due <= seven_days:
-            pending.append(s)
+def _due_label(next_due: str) -> str:
+    try:
+        due = date.fromisoformat(next_due)
+    except ValueError:
+        return next_due
+    diff = (due - date.today()).days
+    day_str = due.strftime("%-d %b")
+    if diff < 0:   return f"{day_str} 🔴 ({abs(diff)}d overdue)"
+    if diff == 0:  return f"{day_str} ⚠️ (today!)"
+    if diff == 1:  return f"{day_str} (tomorrow)"
+    return f"{day_str} (in {diff}d)"
+
+
+def _payment_line(s) -> str:
+    if not s.payment_method:
+        return ""
+    auto = " 🔁 Auto" if s.auto_debit else ""
+    return f"   💳 {s.payment_method}{auto}\n"
+
+
+# ── /digiseva ──────────────────────────────────────────────────
+def _build_summary(services) -> str:
+    today = date.today()
+    seven = today + timedelta(days=7)
+    monthly = 0.0
+    active = [s for s in services if s.active]
+    subs = [s for s in active if s.type == "subscription"]
+    bills = [s for s in active if s.type == "bill"]
+    paid_list, pending_list, overdue_list = [], [], []
+
+    for s in active:
+        monthly += _monthly_equiv(s)
+        st = _status(s)
+        if st == "paid":    paid_list.append(s)
+        elif st == "overdue": overdue_list.append(s)
+        elif st == "pending": pending_list.append(s)
 
     lines = [
-        "📊 *DigiSeva Summary*",
-        f"Monthly burn: ₹{monthly_total:,.0f}",
-        f"Pending (7d): {len(pending)} items",
-        f"Overdue: {len(overdue)} items",
+        "📊 *DigiSeva Overview*",
+        DIV,
+        f"💰 *Monthly burn:* ₹{monthly:,.0f}",
+        "",
+        f"📦 *Active:* {len(active)}  ({len(subs)} subscriptions · {len(bills)} bills)",
+        "",
+        f"✅ Paid this cycle:  {len(paid_list)}",
+        f"⏳ Due in 7 days:    {len(pending_list)}",
+        f"🔴 Overdue:          {len(overdue_list)}",
     ]
+
+    if overdue_list:
+        lines += ["", "⚠️ *Overdue items:*"]
+        for s in overdue_list:
+            lines.append(f"  • {s.name} — ₹{s.amount:,.0f}  ({s.next_due})")
+
+    if pending_list:
+        lines += ["", "📌 *Coming up:*"]
+        for s in pending_list:
+            diff = (date.fromisoformat(s.next_due) - today).days
+            label = "today" if diff == 0 else f"in {diff}d"
+            lines.append(f"  • {s.name} — ₹{s.amount:,.0f}  ({label})")
+
     return "\n".join(lines)
 
 
+# ── /digiseva due ──────────────────────────────────────────────
+def _build_due(services) -> str:
+    today = date.today()
+    seven = today + timedelta(days=7)
+    items = []
+    for s in services:
+        if not s.active or s.paid_current_cycle:
+            continue
+        try:
+            d = date.fromisoformat(s.next_due)
+        except ValueError:
+            continue
+        if today <= d <= seven:
+            items.append((d, s))
+    items.sort(key=lambda x: x[0])
+
+    if not items:
+        return "✅ Nothing due in the next 7 days."
+
+    lines = [f"⏳ *Due in 7 days*  ({len(items)} items)", DIV, ""]
+    nums = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+    for i, (d, s) in enumerate(items):
+        diff = (d - today).days
+        day_lbl = "today ⚠️" if diff == 0 else ("tomorrow" if diff == 1 else f"in {diff}d")
+        num = nums[i] if i < len(nums) else f"{i+1}."
+        lines.append(f"{num} *{s.name}*  — ₹{s.amount:,.0f}")
+        lines.append(f"   {s.category} · {s.cycle}")
+        lines.append(_payment_line(s).rstrip())
+        lines.append(f"   📅 {d.strftime('%-d %b')}  ({day_lbl})")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+# ── /digiseva overdue ──────────────────────────────────────────
+def _build_overdue(services) -> str:
+    today = date.today()
+    items = []
+    for s in services:
+        if not s.active or s.paid_current_cycle:
+            continue
+        try:
+            d = date.fromisoformat(s.next_due)
+        except ValueError:
+            continue
+        if d < today:
+            items.append((d, s))
+    items.sort(key=lambda x: x[0])
+
+    if not items:
+        return "✅ No overdue items. All caught up!"
+
+    lines = [f"🔴 *Overdue*  ({len(items)} items)", DIV, ""]
+    for d, s in items:
+        days_late = (today - d).days
+        lines.append(f"⚠️ *{s.name}*  — ₹{s.amount:,.0f}")
+        lines.append(f"   {s.category} · {s.cycle}")
+        lines.append(_payment_line(s).rstrip())
+        lines.append(f"   📅 Was due {d.strftime('%-d %b')}  ({days_late}d ago)")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+# ── /digiseva monthly ──────────────────────────────────────────
+def _build_monthly(services) -> str:
+    from collections import defaultdict
+    cat_totals: dict = defaultdict(float)
+    grand = 0.0
+    for s in services:
+        if not s.active:
+            continue
+        m = _monthly_equiv(s)
+        if m > 0:
+            cat_totals[s.category] += m
+            grand += m
+
+    if not cat_totals:
+        return "No active services found."
+
+    lines = ["📅 *Monthly Breakdown*", DIV, f"💰 *Total:* ₹{grand:,.0f}/mo", ""]
+    sorted_cats = sorted(cat_totals.items(), key=lambda x: -x[1])
+    max_amt = sorted_cats[0][1]
+    for cat, amt in sorted_cats:
+        pct = (amt / grand * 100)
+        bar_len = int(amt / max_amt * 10)
+        bar = "█" * bar_len + "░" * (10 - bar_len)
+        lines.append(f"`{bar}` {pct:4.0f}%")
+        lines.append(f"   *{cat}*  ₹{amt:,.0f}/mo")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+# ── /digiseva paid ─────────────────────────────────────────────
+def _build_paid_prompt(services) -> tuple[str, dict]:
+    today = date.today()
+    pending = []
+    for s in services:
+        if s.active and not s.paid_current_cycle:
+            pending.append(s)
+    # sort: overdue first, then by due date
+    def sort_key(s):
+        try:
+            d = date.fromisoformat(s.next_due)
+        except ValueError:
+            d = date.today()
+        return d
+    pending.sort(key=sort_key)
+
+    if not pending:
+        return "✅ Nothing pending — all paid!", {}
+
+    index_map = {}  # "1" -> service_id
+    lines = ["💳 *Mark as Paid*", DIV, "Reply with a number:\n"]
+    for i, s in enumerate(pending, 1):
+        index_map[str(i)] = s.id
+        st = _status(s)
+        flag = " 🔴" if st == "overdue" else (" ⏳" if st == "pending" else "")
+        lines.append(f"*{i}.* {s.name}  — ₹{s.amount:,.0f}{flag}")
+        lines.append(f"   {s.category} · 📅 {_due_label(s.next_due)}")
+        lines.append("")
+    return "\n".join(lines).strip(), index_map
+
+
+# ── /digiseva help ─────────────────────────────────────────────
+HELP_TEXT = f"""\
+🤖 *DigiSeva Commands*
+{DIV}
+/digiseva — Summary & status overview
+/digiseva due — Items due in next 7 days
+/digiseva overdue — Unpaid overdue items
+/digiseva paid — Mark an item as paid
+/digiseva monthly — Spend by category
+/digiseva export — Download data as JSON
+/digiseva help — Show this message\
+"""
+
+
+# ── Main handler ───────────────────────────────────────────────
 async def cmd_digiseva(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from storage import load_services, update_service, advance_next_due, get_service
+    from storage import load_services
 
     args = context.args or []
     sub = args[0].lower() if args else ""
     services = load_services()
-    today = date.today()
-    seven_days = today + timedelta(days=7)
+    chat_id = str(update.effective_chat.id)
 
     if sub == "":
-        await update.message.reply_text(_build_summary_text(services), parse_mode="Markdown")
+        await update.message.reply_text(_build_summary(services), parse_mode="Markdown")
 
     elif sub == "due":
-        due_items = []
-        for s in services:
-            if s.paid_current_cycle or not s.active:
-                continue
-            try:
-                d = date.fromisoformat(s.next_due)
-            except ValueError:
-                continue
-            if today <= d <= seven_days:
-                diff = (d - today).days
-                label = "today" if diff == 0 else f"in {diff}d"
-                due_items.append(f"• {s.name} — ₹{s.amount:,.0f} ({label})")
-        msg = "⏳ *Due in next 7 days:*\n" + ("\n".join(due_items) if due_items else "Nothing due soon.")
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        await update.message.reply_text(_build_due(services), parse_mode="Markdown")
 
     elif sub == "overdue":
-        items = []
-        for s in services:
-            if s.paid_current_cycle or not s.active:
-                continue
-            try:
-                d = date.fromisoformat(s.next_due)
-            except ValueError:
-                continue
-            if d < today:
-                items.append(f"• {s.name} — ₹{s.amount:,.0f} (due {s.next_due})")
-        msg = "🔴 *Overdue items:*\n" + ("\n".join(items) if items else "No overdue items.")
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        await update.message.reply_text(_build_overdue(services), parse_mode="Markdown")
 
     elif sub == "monthly":
-        from collections import defaultdict
-        breakdown = defaultdict(float)
-        for s in services:
-            if not s.active:
-                continue
-            if s.cycle == "monthly":
-                breakdown[s.category] += s.amount
-            elif s.cycle == "weekly":
-                breakdown[s.category] += s.amount * 4
-            elif s.cycle == "quarterly":
-                breakdown[s.category] += s.amount / 3
-            elif s.cycle == "half-yearly":
-                breakdown[s.category] += s.amount / 6
-            elif s.cycle == "yearly":
-                breakdown[s.category] += s.amount / 12
-        lines = ["📅 *Monthly breakdown by category:*"]
-        for cat, amt in sorted(breakdown.items(), key=lambda x: -x[1]):
-            lines.append(f"  {cat}: ₹{amt:,.0f}")
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        await update.message.reply_text(_build_monthly(services), parse_mode="Markdown")
 
     elif sub == "paid":
-        pending = [s for s in services if not s.paid_current_cycle and s.active]
-        if not pending:
-            await update.message.reply_text("No pending items to mark paid.")
-            return
-        chat_id = str(update.effective_chat.id)
-        _pending_paid_session[chat_id] = {s.name.lower(): s.id for s in pending}
-        names = "\n".join(f"• {s.name}" for s in pending)
-        await update.message.reply_text(
-            f"Pending items:\n{names}\n\nReply with the name to mark as paid.",
-            parse_mode="Markdown"
-        )
+        msg, index_map = _build_paid_prompt(services)
+        if index_map:
+            _pending_paid_session[chat_id] = index_map
+        await update.message.reply_text(msg, parse_mode="Markdown")
 
     elif sub == "export":
         from storage import get_data_path
-        data_path = get_data_path()
         try:
-            with open(data_path, "rb") as f:
-                await update.message.reply_document(f, filename="digiseva.json")
+            with open(get_data_path(), "rb") as f:
+                today = date.today().isoformat()
+                await update.message.reply_document(
+                    f,
+                    filename=f"digiseva_{today}.json",
+                    caption=f"📦 DigiSeva export — {today}"
+                )
         except FileNotFoundError:
-            await update.message.reply_text("No data file found.")
+            await update.message.reply_text("❌ No data file found.")
+
+    elif sub == "help":
+        await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
 
     else:
         await update.message.reply_text(
-            "Unknown command. Try:\n/digiseva\n/digiseva due\n/digiseva overdue\n"
-            "/digiseva paid\n/digiseva monthly\n/digiseva export"
+            f"❓ Unknown command: `{sub}`\n\nSend /digiseva help for the full list.",
+            parse_mode="Markdown"
         )
 
 
+# ── Paid reply handler ─────────────────────────────────────────
 async def handle_paid_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from storage import load_services, update_service, advance_next_due
+    from storage import load_services, save_services, advance_next_due
 
     chat_id = str(update.effective_chat.id)
     if chat_id not in _pending_paid_session:
         return
 
-    name_map = _pending_paid_session[chat_id]
-    text = update.message.text.strip().lower()
+    index_map = _pending_paid_session[chat_id]
+    text = update.message.text.strip()
 
-    if text not in name_map:
-        await update.message.reply_text(f"'{update.message.text}' not found in pending list. Try again or /digiseva.")
+    if text not in index_map:
+        keys = ", ".join(index_map.keys())
+        await update.message.reply_text(
+            f"❓ Please reply with one of: {keys}\n\nOr /digiseva to cancel.",
+            parse_mode="Markdown"
+        )
         return
 
-    service_id = name_map[text]
+    service_id = index_map[text]
     services = load_services()
     for i, s in enumerate(services):
         if s.id == service_id:
             new_due = advance_next_due(s)
-            s.paid_current_cycle = True
-            s.next_due = new_due
-            services[i] = s
-            from storage import save_services
+            services[i].paid_current_cycle = True
+            services[i].next_due = new_due
             save_services(services)
             del _pending_paid_session[chat_id]
-            await update.message.reply_text(f"✅ {s.name} marked as paid. Next due: {new_due}")
+            await update.message.reply_text(
+                f"✅ *{s.name}* marked as paid\n"
+                f"   ₹{s.amount:,.0f} · {s.category}\n"
+                f"   📅 Next due: {new_due}",
+                parse_mode="Markdown"
+            )
             return
 
 
