@@ -220,68 +220,64 @@ def _build_paid_prompt(services) -> tuple[str, dict]:
     return "\n".join(lines).strip(), index_map
 
 
-# ── /digiseva help ─────────────────────────────────────────────
+# ── Help text ──────────────────────────────────────────────────
 HELP_TEXT = f"""\
 🤖 *DigiSeva Commands*
 {DIV}
-/digiseva — Summary & status overview
-/digiseva due — Items due in next 7 days
-/digiseva overdue — Unpaid overdue items
-/digiseva paid — Mark an item as paid
-/digiseva monthly — Spend by category
-/digiseva export — Download data as JSON
-/digiseva help — Show this message\
+/summary — Overview & status
+/due — Items due in next 7 days
+/overdue — Unpaid overdue items
+/paid — Mark an item as paid
+/monthly — Spend by category
+/export — Download data as JSON
+/help — Show this message\
 """
 
 
-# ── Main handler ───────────────────────────────────────────────
-async def cmd_digiseva(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+# ── Individual command handlers ────────────────────────────────
+async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import load_services
+    await update.message.reply_text(_build_summary(load_services()), parse_mode="Markdown")
 
-    args = context.args or []
-    sub = args[0].lower() if args else ""
-    services = load_services()
+async def cmd_due(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from storage import load_services
+    await update.message.reply_text(_build_due(load_services()), parse_mode="Markdown")
+
+async def cmd_overdue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from storage import load_services
+    await update.message.reply_text(_build_overdue(load_services()), parse_mode="Markdown")
+
+async def cmd_monthly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from storage import load_services
+    await update.message.reply_text(_build_monthly(load_services()), parse_mode="Markdown")
+
+async def cmd_paid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from storage import load_services
     chat_id = str(update.effective_chat.id)
+    msg, index_map = _build_paid_prompt(load_services())
+    if index_map:
+        _pending_paid_session[chat_id] = index_map
+    await update.message.reply_text(msg, parse_mode="Markdown")
 
-    if sub == "":
-        await update.message.reply_text(_build_summary(services), parse_mode="Markdown")
+async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from storage import get_data_path
+    try:
+        with open(get_data_path(), "rb") as f:
+            today = date.today().isoformat()
+            await update.message.reply_document(
+                f,
+                filename=f"digiseva_{today}.json",
+                caption=f"📦 DigiSeva export — {today}"
+            )
+    except FileNotFoundError:
+        await update.message.reply_text("❌ No data file found.")
 
-    elif sub == "due":
-        await update.message.reply_text(_build_due(services), parse_mode="Markdown")
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
 
-    elif sub == "overdue":
-        await update.message.reply_text(_build_overdue(services), parse_mode="Markdown")
-
-    elif sub == "monthly":
-        await update.message.reply_text(_build_monthly(services), parse_mode="Markdown")
-
-    elif sub == "paid":
-        msg, index_map = _build_paid_prompt(services)
-        if index_map:
-            _pending_paid_session[chat_id] = index_map
-        await update.message.reply_text(msg, parse_mode="Markdown")
-
-    elif sub == "export":
-        from storage import get_data_path
-        try:
-            with open(get_data_path(), "rb") as f:
-                today = date.today().isoformat()
-                await update.message.reply_document(
-                    f,
-                    filename=f"digiseva_{today}.json",
-                    caption=f"📦 DigiSeva export — {today}"
-                )
-        except FileNotFoundError:
-            await update.message.reply_text("❌ No data file found.")
-
-    elif sub == "help":
-        await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
-
-    else:
-        await update.message.reply_text(
-            f"❓ Unknown command: `{sub}`\n\nSend /digiseva help for the full list.",
-            parse_mode="Markdown"
-        )
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from storage import load_services
+    await update.message.reply_text(_build_summary(load_services()), parse_mode="Markdown")
 
 
 # ── Paid reply handler ─────────────────────────────────────────
@@ -323,6 +319,13 @@ async def handle_paid_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 def create_bot_app(token: str) -> Application:
     app = Application.builder().token(token).build()
-    app.add_handler(CommandHandler("digiseva", cmd_digiseva))
+    app.add_handler(CommandHandler("start",   cmd_start))
+    app.add_handler(CommandHandler("summary", cmd_summary))
+    app.add_handler(CommandHandler("due",     cmd_due))
+    app.add_handler(CommandHandler("overdue", cmd_overdue))
+    app.add_handler(CommandHandler("paid",    cmd_paid))
+    app.add_handler(CommandHandler("monthly", cmd_monthly))
+    app.add_handler(CommandHandler("export",  cmd_export))
+    app.add_handler(CommandHandler("help",    cmd_help))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_paid_reply))
     return app
