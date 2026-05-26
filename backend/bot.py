@@ -277,7 +277,45 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import load_services
-    await update.message.reply_text(_build_summary(load_services()), parse_mode="Markdown")
+    services = load_services()
+    active = [s for s in services if s.active]
+    monthly = sum(_monthly_equiv(s) for s in active)
+    paid = sum(1 for s in active if s.paid_current_cycle)
+    today = date.today()
+    overdue = sum(
+        1 for s in active
+        if not s.paid_current_cycle
+        and _try_date(s.next_due) < today
+    )
+    due_soon = sum(
+        1 for s in active
+        if not s.paid_current_cycle
+        and today <= _try_date(s.next_due) <= today + timedelta(days=7)
+    )
+    name = update.effective_user.first_name or "there"
+    msg = (
+        f"👋 *Hey {name}!*\n"
+        f"{DIV}\n"
+        f"DigiSeva is tracking *{len(active)} services* for you.\n"
+        f"\n"
+        f"💰 Monthly burn:  *₹{monthly:,.0f}*\n"
+        f"✅ Paid this cycle:  {paid}\n"
+        f"⏳ Due in 7 days:   {due_soon}\n"
+        f"🔴 Overdue:         {overdue}\n"
+        f"\n"
+        f"{DIV}\n"
+        f"*Commands*\n"
+        f"/summary  /due  /overdue\n"
+        f"/paid  /monthly  /export\n"
+    )
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+def _try_date(d: str) -> date:
+    try:
+        return date.fromisoformat(d)
+    except ValueError:
+        return date.max
 
 
 # ── Paid reply handler ─────────────────────────────────────────
