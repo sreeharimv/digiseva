@@ -1,0 +1,68 @@
+{
+  "services": [
+    {
+      "id": "a1b2c3d4-0001-0001-0001-000000000001",
+      "name": "Netflix",
+      "type": "subscription",
+      "category": "OTT",
+      "amount": 649,
+      "currency": "INR",
+      "cycle": "monthly",
+      "next_due": "2026-06-01",
+      "payment_method": "HDFC Credit Card",
+      "auto_debit": true,
+      "paid_current_cycle": true,
+      "notes": "4K plan, shared with family",
+      "active": true,
+      "created_at": "2026-01-01T00:00:00"
+    },
+    {
+      "id": "a1b2c3d4-0002-0002-0002-000000000002",
+      "name": "Claude Pro",
+      "type": "subscription",
+      "category": "AI",
+      "amount": 1700,
+      "currency": "INR",
+      "cycle": "monthly",
+      "next_due": "2026-05-28",
+      "payment_method": "ICICI Credit Card",
+      "auto_debit": false,
+      "paid_current_cycle": false,
+      "notes": "",
+      "active": true,
+      "created_at": "2026-02-01T00:00:00"
+    },
+    {
+      "id": "a1b2c3d4-0003-0003-0003-000000000003",
+      "name": "Electricity Bill",
+      "type": "bill",
+      "category": "Electricity",
+      "amount": 1200,
+      "currency": "INR",
+      "cycle": "monthly",
+      "next_due": "2026-05-20",
+      "payment_method": "UPI",
+      "auto_debit": false,
+      "paid_current_cycle": false,
+      "notes": "BESCOM — meter no. 12345",
+      "active": true,
+      "created_at": "2026-01-01T00:00:00"
+    },
+    {
+      "id": "a1b2c3d4-0004-0004-0004-000000000004",
+      "name": "Cloudflare",
+      "type": "subscription",
+      "category": "Cloud",
+      "amount": 1500,
+      "currency": "INR",
+      "cycle": "yearly",
+      "next_due": "2026-06-15",
+      "payment_method": "HDFC Credit Card",
+      "auto_debit": true,
+      "paid_current_cycle": false,
+      "notes": "Domain + DNS",
+      "active": true,
+      "created_at": "2026-01-01T00:00:00"
+    }
+  ]
+}

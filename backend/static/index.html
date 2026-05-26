@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DigiSeva</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700;800&family=Noto+Serif:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --accent: #E8451A;
+      --accent-light: rgba(232,69,26,.15);
+      --accent-dark: #c43a14;
+      --green: #4ade80;
+      --green-bg: rgba(74,222,128,.12);
+      --amber: #fbbf24;
+      --amber-bg: rgba(251,191,36,.12);
+      --red: #f87171;
+      --red-bg: rgba(248,113,113,.12);
+      --neutral-bg: rgba(255,255,255,.06);
+      --bg: #1a1b1e;
+      --bg-card: #25262b;
+      --bg-nav: #1d1e21;
+      --text: #e8e9ed;
+      --text-muted: #6c7086;
+      --border: rgba(255,255,255,.07);
+      --shadow: 0 1px 3px rgba(0,0,0,.4), 0 1px 2px rgba(0,0,0,.3);
+      --shadow-md: 0 4px 16px rgba(0,0,0,.5);
+      --radius: 10px;
+    }
+
+    :root {
+      --font-sans: "Noto Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-serif: "Noto Serif", Georgia, serif;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    header {
+      background: var(--bg-nav);
+      border-bottom: 1px solid var(--border);
+      padding: 0 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 60px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: var(--shadow);
+    }
+
+    .logo {
+      font-family: var(--font-serif);
+      font-size: 1.4rem;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+      color: var(--accent);
+    }
+    .logo span { color: var(--text); }
+
+    .header-actions { display: flex; gap: .5rem; align-items: center; }
+
+    nav {
+      background: var(--bg-nav);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      padding: 0 1.5rem;
+    }
+
+    .tab-btn {
+      padding: .75rem 1.25rem;
+      border: none;
+      background: none;
+      font-size: .9rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      cursor: pointer;
+      border-bottom: 3px solid transparent;
+      transition: color .15s, border-color .15s;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    main { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* ── Dashboard ── */
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .stat-card {
+      background: var(--bg-card);
+      border-radius: var(--radius);
+      padding: 1.25rem 1.5rem;
+      box-shadow: var(--shadow);
+    }
+    .stat-card .label {
+      font-size: .75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--text-muted);
+      margin-bottom: .25rem;
+    }
+    .stat-card .value {
+      font-family: var(--font-serif);
+      font-size: 1.8rem;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1.1;
+    }
+    .stat-card .value.accent { color: var(--accent); }
+    .stat-card .sub { font-size: .8rem; color: var(--text-muted); margin-top: .2rem; }
+
+    .dash-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+    }
+    @media (max-width: 700px) { .dash-grid { grid-template-columns: 1fr; } }
+
+    .panel {
+      background: var(--bg-card);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 1.25rem;
+    }
+    .panel h3 {
+      font-family: var(--font-serif);
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      color: var(--text);
+    }
+
+    .due-card {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: .65rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .due-card:last-child { border-bottom: none; }
+    .due-card .name { font-weight: 600; font-size: .9rem; }
+    .due-card .meta { font-size: .78rem; color: var(--text-muted); margin-top: 2px; }
+    .due-card .amount { font-weight: 700; font-size: .95rem; }
+
+    .chart-wrap { position: relative; height: 220px; }
+
+    /* ── Service table ── */
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    .section-header h2 { font-family: var(--font-serif); font-size: 1.15rem; font-weight: 700; }
+
+    .filters { display: flex; gap: .5rem; flex-wrap: wrap; }
+    .filter-select {
+      padding: .35rem .6rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: .82rem;
+      background: var(--bg-card);
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .services-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 1rem;
+    }
+
+    .service-card {
+      background: var(--bg-card);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 1.1rem 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: .5rem;
+      transition: box-shadow .15s;
+    }
+    .service-card:hover { box-shadow: var(--shadow-md); }
+    .service-card.overdue { border-left: 3px solid var(--red); }
+    .service-card.pending { border-left: 3px solid var(--amber); }
+    .service-card.paid { border-left: 3px solid var(--green); }
+    .service-card.upcoming { border-left: 3px solid #4a5568; }
+
+    .card-top { display: flex; justify-content: space-between; align-items: flex-start; }
+    .card-name { font-family: var(--font-serif); font-weight: 700; font-size: 1rem; }
+    .card-amount { font-family: var(--font-serif); font-weight: 700; font-size: 1.05rem; color: var(--accent); }
+
+    .card-meta { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: .2rem .55rem;
+      border-radius: 20px;
+      font-size: .72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .badge-cat { background: var(--accent-light); color: var(--accent); }
+    .badge-paid { background: var(--green-bg); color: var(--green); }
+    .badge-pending { background: var(--amber-bg); color: var(--amber); }
+    .badge-overdue { background: var(--red-bg); color: var(--red); }
+    .badge-upcoming { background: var(--neutral-bg); color: var(--text-muted); }
+    .badge-cycle { background: rgba(99,102,241,.15); color: #a5b4fc; }
+
+    .card-due { font-size: .8rem; color: var(--text-muted); }
+
+    .card-actions { display: flex; gap: .5rem; margin-top: .25rem; }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: .3rem;
+      padding: .45rem .9rem;
+      border-radius: 7px;
+      font-size: .82rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: background .15s, opacity .15s;
+    }
+    .btn:active { opacity: .85; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-dark); }
+    .btn-ghost { background: var(--neutral-bg); color: var(--text); }
+    .btn-ghost:hover { background: rgba(255,255,255,.12); }
+    .btn-success { background: var(--green-bg); color: var(--green); }
+    .btn-success:hover { background: rgba(74,222,128,.22); }
+    .btn-danger { background: var(--red-bg); color: var(--red); }
+    .btn-danger:hover { background: rgba(248,113,113,.22); }
+    .btn-sm { padding: .3rem .65rem; font-size: .78rem; }
+
+    /* ── Modal ── */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.65);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    .modal-overlay.open { display: flex; }
+
+    .modal {
+      background: var(--bg-card);
+      border-radius: 14px;
+      box-shadow: 0 20px 60px rgba(0,0,0,.6);
+      border: 1px solid var(--border);
+      width: 100%;
+      max-width: 500px;
+      max-height: 90vh;
+      overflow-y: auto;
+      padding: 1.75rem;
+    }
+
+    .modal h2 { font-family: var(--font-serif); font-size: 1.2rem; font-weight: 700; margin-bottom: 1.25rem; }
+
+    .form-group { margin-bottom: 1rem; }
+    .form-group label {
+      display: block;
+      font-size: .8rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: .3rem;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+    .form-group input,
+    .form-group select,
+    .form-group textarea {
+      width: 100%;
+      padding: .55rem .75rem;
+      border: 1.5px solid var(--border);
+      border-radius: 7px;
+      font-size: .9rem;
+      font-family: inherit;
+      color: var(--text);
+      background: var(--bg);
+      transition: border-color .15s;
+    }
+    .form-group input:focus,
+    .form-group select:focus,
+    .form-group textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
+
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      font-size: .88rem;
+      font-weight: 600;
+    }
+    .checkbox-row input[type=checkbox] {
+      width: 1rem;
+      height: 1rem;
+      accent-color: var(--accent);
+    }
+
+    .modal-footer { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1.25rem; }
+
+    .empty-state {
+      text-align: center;
+      padding: 3rem 1rem;
+      color: var(--text-muted);
+    }
+    .empty-state p { font-size: 1.1rem; font-weight: 600; margin-bottom: .5rem; }
+    .empty-state small { font-size: .85rem; }
+
+    .toast {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      background: #e8e9ed;
+      color: #1a1b1e;
+      padding: .75rem 1.25rem;
+      border-radius: 9px;
+      font-size: .88rem;
+      font-weight: 600;
+      box-shadow: var(--shadow-md);
+      z-index: 999;
+      transform: translateY(100px);
+      opacity: 0;
+      transition: transform .25s, opacity .25s;
+    }
+    .toast.show { transform: translateY(0); opacity: 1; }
+
+    .payment-info { font-size: .78rem; color: var(--text-muted); }
+    .auto-badge {
+      display: inline-block;
+      background: rgba(99,102,241,.15);
+      color: #a5b4fc;
+      font-size: .68rem;
+      font-weight: 700;
+      padding: .1rem .4rem;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">digi<span>Seva</span></div>
+  <div class="header-actions">
+    <button class="btn btn-ghost btn-sm" onclick="exportCSV()">↓ CSV</button>
+    <button class="btn btn-primary btn-sm" onclick="openModal()">+ Add</button>
+  </div>
+</header>
+
+<nav>
+  <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+  <button class="tab-btn" data-tab="subscriptions">Subscriptions</button>
+  <button class="tab-btn" data-tab="bills">Bills</button>
+</nav>
+
+<main>
+  <!-- Dashboard -->
+  <div class="tab-panel active" id="tab-dashboard">
+    <div class="stat-grid" id="stat-grid"></div>
+    <div class="dash-grid">
+      <div>
+        <div class="panel" id="upcoming-panel">
+          <h3>⏳ Upcoming (next 7 days)</h3>
+          <div id="upcoming-list"><p style="color:var(--text-muted);font-size:.85rem;">Loading…</p></div>
+        </div>
+        <div class="panel" style="margin-top:1rem;" id="overdue-panel">
+          <h3>🔴 Overdue</h3>
+          <div id="overdue-list"><p style="color:var(--text-muted);font-size:.85rem;">Loading…</p></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>📊 Monthly by Category</h3>
+        <div class="chart-wrap">
+          <canvas id="donutChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Subscriptions -->
+  <div class="tab-panel" id="tab-subscriptions">
+    <div class="section-header">
+      <h2>Subscriptions</h2>
+      <div class="filters">
+        <select class="filter-select" id="sub-category-filter" onchange="renderSubscriptions()">
+          <option value="">All categories</option>
+          <option>OTT</option><option>Cloud</option><option>AI</option>
+          <option>Telecom</option><option>Domain</option><option>VPN</option>
+          <option>Software</option><option>Other</option>
+        </select>
+      </div>
+    </div>
+    <div class="services-grid" id="subscriptions-grid"></div>
+  </div>
+
+  <!-- Bills -->
+  <div class="tab-panel" id="tab-bills">
+    <div class="section-header">
+      <h2>Bills</h2>
+      <div class="filters">
+        <select class="filter-select" id="bill-category-filter" onchange="renderBills()">
+          <option value="">All categories</option>
+          <option>Electricity</option><option>FTTH</option><option>LPG</option>
+          <option>DTH</option><option>Water</option><option>Maintenance</option>
+          <option>Other</option>
+        </select>
+      </div>
+    </div>
+    <div class="services-grid" id="bills-grid"></div>
+  </div>
+</main>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modal-overlay" onclick="closeModalOnOverlay(event)">
+  <div class="modal">
+    <h2 id="modal-title">Add Service</h2>
+    <form id="service-form" onsubmit="submitForm(event)">
+      <input type="hidden" id="form-id" />
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Name</label>
+          <input type="text" id="form-name" required placeholder="Netflix" />
+        </div>
+        <div class="form-group">
+          <label>Type</label>
+          <select id="form-type" onchange="updateCategoryOptions()" required>
+            <option value="subscription">Subscription</option>
+            <option value="bill">Bill</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Category</label>
+          <select id="form-category" required></select>
+        </div>
+        <div class="form-group">
+          <label>Cycle</label>
+          <select id="form-cycle" required>
+            <option value="monthly">Monthly</option>
+            <option value="weekly">Weekly</option>
+            <option value="quarterly">Quarterly</option>
+            <option value="half-yearly">Half-Yearly</option>
+            <option value="yearly">Yearly</option>
+            <option value="one-time">One-time</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Amount (₹)</label>
+          <input type="number" id="form-amount" required min="0" step="0.01" placeholder="649" />
+        </div>
+        <div class="form-group">
+          <label>Next Due</label>
+          <input type="date" id="form-next-due" required />
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Payment Method</label>
+        <input type="text" id="form-payment-method" placeholder="HDFC Credit Card" />
+      </div>
+
+      <div class="form-group">
+        <label>Notes</label>
+        <textarea id="form-notes" rows="2" placeholder="Optional notes…"></textarea>
+      </div>
+
+      <div style="display:flex;gap:1.5rem;margin-bottom:.5rem;">
+        <label class="checkbox-row">
+          <input type="checkbox" id="form-auto-debit" />
+          Auto-debit
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="form-active" checked />
+          Active
+        </label>
+      </div>
+
+      <div class="modal-footer">
+        <button type="button" class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="form-submit-btn">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  const SUB_CATEGORIES = ['OTT','Cloud','AI','Telecom','Domain','VPN','Software','Other'];
+  const BILL_CATEGORIES = ['Electricity','FTTH','LPG','DTH','Water','Maintenance','Other'];
+  const CHART_COLORS = ['#E8451A','#f97316','#eab308','#22c55e','#06b6d4','#6366f1','#ec4899','#64748b'];
+
+  let allServices = [];
+  let donutChart = null;
+
+  // ── Tabs ──
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    });
+  });
+
+  // ── API helpers ──
+  async function api(path, method = 'GET', body = null) {
+    const opts = { method, headers: { 'Content-Type': 'application/json' } };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(path, opts);
+    if (!res.ok) throw new Error(await res.text());
+    if (res.status === 204) return null;
+    return res.json();
+  }
+
+  // ── Status helpers ──
+  function getStatus(service) {
+    if (service.paid_current_cycle) return 'paid';
+    const today = new Date(); today.setHours(0,0,0,0);
+    const due = new Date(service.next_due + 'T00:00:00');
+    const diff = Math.floor((due - today) / 86400000);
+    if (diff < 0) return 'overdue';
+    if (diff <= 7) return 'pending';
+    return 'upcoming';
+  }
+
+  function statusBadge(status) {
+    const map = {
+      paid: ['badge-paid','✅ Paid'],
+      pending: ['badge-pending','⏳ Pending'],
+      overdue: ['badge-overdue','🔴 Overdue'],
+      upcoming: ['badge-upcoming','⬜ Upcoming'],
+    };
+    const [cls, label] = map[status] || map.upcoming;
+    return `<span class="badge ${cls}">${label}</span>`;
+  }
+
+  // ── Load & render ──
+  async function loadAll() {
+    allServices = await api('/api/services');
+    renderDashboard();
+    renderSubscriptions();
+    renderBills();
+  }
+
+  async function renderDashboard() {
+    const summary = await api('/api/summary');
+
+    // Stats
+    const grid = document.getElementById('stat-grid');
+    grid.innerHTML = `
+      <div class="stat-card">
+        <div class="label">Monthly Burn</div>
+        <div class="value accent">₹${summary.monthly_total.toLocaleString('en-IN', {maximumFractionDigits:0})}</div>
+        <div class="sub">Estimated this month</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Active Services</div>
+        <div class="value">${summary.total_count}</div>
+        <div class="sub">${summary.paid_count} paid this cycle</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Due in 7 Days</div>
+        <div class="value">${summary.upcoming.length}</div>
+        <div class="sub">Need attention</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Overdue</div>
+        <div class="value" style="color:${summary.overdue.length ? 'var(--red)' : 'var(--text)'}">${summary.overdue.length}</div>
+        <div class="sub">${summary.overdue.length ? 'Action required' : 'All good!'}</div>
+      </div>
+    `;
+
+    // Upcoming list
+    const upEl = document.getElementById('upcoming-list');
+    if (summary.upcoming.length === 0) {
+      upEl.innerHTML = '<p style="color:var(--text-muted);font-size:.85rem;">Nothing due in the next 7 days.</p>';
+    } else {
+      upEl.innerHTML = summary.upcoming.map(s => `
+        <div class="due-card">
+          <div>
+            <div class="name">${s.name}</div>
+            <div class="meta">${s.category} · ${s.cycle} · ${s.days_until_due === 0 ? 'Today' : 'in ' + s.days_until_due + 'd'}</div>
+          </div>
+          <div class="amount">₹${s.amount.toLocaleString('en-IN')}</div>
+        </div>`).join('');
+    }
+
+    // Overdue list
+    const ovEl = document.getElementById('overdue-list');
+    if (summary.overdue.length === 0) {
+      ovEl.innerHTML = '<p style="color:var(--text-muted);font-size:.85rem;">No overdue items.</p>';
+    } else {
+      ovEl.innerHTML = summary.overdue.map(s => `
+        <div class="due-card" style="background:var(--red-bg);border-radius:7px;padding:.65rem .75rem;margin-bottom:.4rem;border:none;">
+          <div>
+            <div class="name" style="color:var(--red)">${s.name}</div>
+            <div class="meta">${s.category} · overdue by ${s.days_overdue}d</div>
+          </div>
+          <div>
+            <div class="amount" style="color:var(--red)">₹${s.amount.toLocaleString('en-IN')}</div>
+            <button class="btn btn-success btn-sm" style="margin-top:.25rem" onclick="togglePaid('${s.id}')">Mark paid</button>
+          </div>
+        </div>`).join('');
+    }
+
+    // Donut chart
+    const byCategory = {};
+    allServices.filter(s => s.active).forEach(s => {
+      let monthly = 0;
+      if (s.cycle === 'monthly') monthly = s.amount;
+      else if (s.cycle === 'weekly') monthly = s.amount * 4;
+      else if (s.cycle === 'quarterly') monthly = s.amount / 3;
+      else if (s.cycle === 'half-yearly') monthly = s.amount / 6;
+      else if (s.cycle === 'yearly') monthly = s.amount / 12;
+      if (monthly > 0) byCategory[s.category] = (byCategory[s.category] || 0) + monthly;
+    });
+
+    const labels = Object.keys(byCategory);
+    const values = Object.values(byCategory);
+
+    if (donutChart) donutChart.destroy();
+    const ctx = document.getElementById('donutChart').getContext('2d');
+    donutChart = new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels,
+        datasets: [{
+          data: values,
+          backgroundColor: CHART_COLORS.slice(0, labels.length),
+          borderWidth: 2,
+          borderColor: '#fff',
+          hoverOffset: 6,
+        }]
+      },
+      options: {
+        cutout: '65%',
+        plugins: {
+          legend: { position: 'bottom', labels: { font: { size: 11 }, padding: 10 } },
+          tooltip: {
+            callbacks: {
+              label: ctx => ` ₹${ctx.raw.toLocaleString('en-IN', {maximumFractionDigits:0})}/mo`
+            }
+          }
+        }
+      }
+    });
+  }
+
+  function renderServiceCard(s) {
+    const status = getStatus(s);
+    return `
+      <div class="service-card ${status}" id="card-${s.id}">
+        <div class="card-top">
+          <div class="card-name">${s.name}</div>
+          <div class="card-amount">₹${s.amount.toLocaleString('en-IN')}</div>
+        </div>
+        <div class="card-meta">
+          <span class="badge badge-cat">${s.category}</span>
+          <span class="badge badge-cycle">${s.cycle}</span>
+          ${statusBadge(status)}
+        </div>
+        <div class="card-due">Due: <strong>${s.next_due}</strong></div>
+        ${s.payment_method ? `<div class="payment-info">${s.payment_method}${s.auto_debit ? ' <span class="auto-badge">Auto</span>' : ''}</div>` : ''}
+        <div class="card-actions">
+          <button class="btn btn-ghost btn-sm" onclick="openModal('${s.id}')">Edit</button>
+          <button class="btn ${status === 'paid' ? 'btn-ghost' : 'btn-success'} btn-sm" onclick="togglePaid('${s.id}')">
+            ${status === 'paid' ? '↩ Unpaid' : '✓ Paid'}
+          </button>
+          <button class="btn btn-danger btn-sm" onclick="deleteService('${s.id}', '${s.name.replace(/'/g,"\\'")}')">Delete</button>
+        </div>
+      </div>`;
+  }
+
+  function renderSubscriptions() {
+    const cat = document.getElementById('sub-category-filter').value;
+    const subs = allServices.filter(s => s.type === 'subscription' && (!cat || s.category === cat));
+    const el = document.getElementById('subscriptions-grid');
+    el.innerHTML = subs.length
+      ? subs.map(renderServiceCard).join('')
+      : `<div class="empty-state"><p>No subscriptions yet</p><small>Click "+ Add" to add one</small></div>`;
+  }
+
+  function renderBills() {
+    const cat = document.getElementById('bill-category-filter').value;
+    const bills = allServices.filter(s => s.type === 'bill' && (!cat || s.category === cat));
+    const el = document.getElementById('bills-grid');
+    el.innerHTML = bills.length
+      ? bills.map(renderServiceCard).join('')
+      : `<div class="empty-state"><p>No bills yet</p><small>Click "+ Add" to add one</small></div>`;
+  }
+
+  // ── Actions ──
+  async function togglePaid(id) {
+    try {
+      const updated = await api(`/api/services/${id}/paid`, 'POST');
+      const idx = allServices.findIndex(s => s.id === id);
+      if (idx !== -1) allServices[idx] = updated;
+      renderDashboard();
+      renderSubscriptions();
+      renderBills();
+      toast(updated.paid_current_cycle ? '✅ Marked as paid' : '↩ Marked as unpaid');
+    } catch (e) { toast('Error: ' + e.message, true); }
+  }
+
+  async function deleteService(id, name) {
+    if (!confirm(`Delete "${name}"?`)) return;
+    try {
+      await api(`/api/services/${id}`, 'DELETE');
+      allServices = allServices.filter(s => s.id !== id);
+      renderDashboard();
+      renderSubscriptions();
+      renderBills();
+      toast('Deleted ' + name);
+    } catch (e) { toast('Error: ' + e.message, true); }
+  }
+
+  function exportCSV() {
+    window.location.href = '/api/export/csv';
+  }
+
+  // ── Modal ──
+  function updateCategoryOptions() {
+    const type = document.getElementById('form-type').value;
+    const cats = type === 'subscription' ? SUB_CATEGORIES : BILL_CATEGORIES;
+    const sel = document.getElementById('form-category');
+    sel.innerHTML = cats.map(c => `<option value="${c}">${c}</option>`).join('');
+  }
+
+  function openModal(id = null) {
+    updateCategoryOptions();
+    const form = document.getElementById('service-form');
+    form.reset();
+    document.getElementById('form-active').checked = true;
+
+    if (id) {
+      const s = allServices.find(x => x.id === id);
+      if (!s) return;
+      document.getElementById('modal-title').textContent = 'Edit Service';
+      document.getElementById('form-submit-btn').textContent = 'Save Changes';
+      document.getElementById('form-id').value = s.id;
+      document.getElementById('form-name').value = s.name;
+      document.getElementById('form-type').value = s.type;
+      updateCategoryOptions();
+      document.getElementById('form-category').value = s.category;
+      document.getElementById('form-cycle').value = s.cycle;
+      document.getElementById('form-amount').value = s.amount;
+      document.getElementById('form-next-due').value = s.next_due;
+      document.getElementById('form-payment-method').value = s.payment_method || '';
+      document.getElementById('form-notes').value = s.notes || '';
+      document.getElementById('form-auto-debit').checked = s.auto_debit;
+      document.getElementById('form-active').checked = s.active;
+    } else {
+      document.getElementById('modal-title').textContent = 'Add Service';
+      document.getElementById('form-submit-btn').textContent = 'Add Service';
+      document.getElementById('form-id').value = '';
+      const today = new Date().toISOString().slice(0, 10);
+      document.getElementById('form-next-due').value = today;
+    }
+
+    document.getElementById('modal-overlay').classList.add('open');
+  }
+
+  function closeModal() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  }
+
+  function closeModalOnOverlay(e) {
+    if (e.target === document.getElementById('modal-overlay')) closeModal();
+  }
+
+  async function submitForm(e) {
+    e.preventDefault();
+    const id = document.getElementById('form-id').value;
+    const payload = {
+      name: document.getElementById('form-name').value,
+      type: document.getElementById('form-type').value,
+      category: document.getElementById('form-category').value,
+      cycle: document.getElementById('form-cycle').value,
+      amount: parseFloat(document.getElementById('form-amount').value),
+      next_due: document.getElementById('form-next-due').value,
+      payment_method: document.getElementById('form-payment-method').value,
+      notes: document.getElementById('form-notes').value,
+      auto_debit: document.getElementById('form-auto-debit').checked,
+      active: document.getElementById('form-active').checked,
+    };
+
+    try {
+      if (id) {
+        const updated = await api(`/api/services/${id}`, 'PUT', payload);
+        const idx = allServices.findIndex(s => s.id === id);
+        if (idx !== -1) allServices[idx] = updated;
+        toast('Service updated');
+      } else {
+        const created = await api('/api/services', 'POST', payload);
+        allServices.push(created);
+        toast('Service added');
+      }
+      closeModal();
+      renderDashboard();
+      renderSubscriptions();
+      renderBills();
+    } catch (err) { toast('Error: ' + err.message, true); }
+  }
+
+  // ── Toast ──
+  function toast(msg, isError = false) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.style.background = isError ? '#f87171' : '#e8e9ed';
+    el.style.color = isError ? '#1a1b1e' : '#1a1b1e';
+    el.classList.add('show');
+    setTimeout(() => el.classList.remove('show'), 3000);
+  }
+
+  // ── Init ──
+  updateCategoryOptions();
+  loadAll();
+</script>
+</body>
+</html>

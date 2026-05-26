@@ -1,0 +1,9 @@
+services:
+  digiseva:
+    build: ./backend
+    ports:
+      - "8200:8200"
+    volumes:
+      - ./data:/app/data
+    env_file: .env
+    restart: unless-stopped
