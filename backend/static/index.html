@@ -376,7 +376,11 @@
 <header>
   <div class="logo">digi<span>Seva</span></div>
   <div class="header-actions">
-    <button class="btn btn-ghost btn-sm" onclick="exportCSV()">↓ CSV</button>
+    <button class="btn btn-ghost btn-sm" onclick="exportCSV()">↓ Export</button>
+    <label class="btn btn-ghost btn-sm" style="cursor:pointer;" title="Import CSV">
+      ↑ Import
+      <input type="file" id="csv-import-input" accept=".csv" style="display:none" onchange="importCSV(this)" />
+    </label>
     <button class="btn btn-primary btn-sm" onclick="openModal()">+ Add</button>
   </div>
 </header>
@@ -851,6 +855,23 @@
     el.style.color = isError ? '#1a1b1e' : '#1a1b1e';
     el.classList.add('show');
     setTimeout(() => el.classList.remove('show'), 3000);
+  }
+
+  // ── Import CSV ──
+  async function importCSV(input) {
+    const file = input.files[0];
+    if (!file) return;
+    input.value = '';
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      const res = await fetch('/api/import/csv', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Import failed');
+      const msg = `✅ Imported: ${data.created} added, ${data.updated} updated${data.skipped ? ', ' + data.skipped + ' skipped' : ''}`;
+      toast(msg);
+      loadAll();
+    } catch (e) { toast('Import error: ' + e.message, true); }
   }
 
   // ── Init ──

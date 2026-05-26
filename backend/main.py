@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -197,6 +197,72 @@ def export_csv():
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=digiseva.csv"},
     )
+
+
+@app.post("/api/import/csv")
+async def import_csv(file: UploadFile = File(...)):
+    content = await file.read()
+    try:
+        text = content.decode("utf-8-sig")  # handle Excel BOM
+    except UnicodeDecodeError:
+        text = content.decode("latin-1")
+
+    reader = csv.DictReader(io.StringIO(text))
+    required = {"name", "type", "category", "amount", "cycle", "next_due"}
+    if not required.issubset(set(reader.fieldnames or [])):
+        raise HTTPException(status_code=400, detail=f"CSV must have columns: {required}")
+
+    services = load_services()
+    existing_ids = {s.id for s in services}
+
+    created, updated, skipped = 0, 0, 0
+    errors = []
+
+    for i, row in enumerate(reader, start=2):
+        try:
+            row_id = row.get("id", "").strip()
+            payload = {
+                "name":               row["name"].strip(),
+                "type":               row["type"].strip(),
+                "category":           row["category"].strip(),
+                "amount":             float(row["amount"]),
+                "currency":           row.get("currency", "INR").strip() or "INR",
+                "cycle":              row["cycle"].strip(),
+                "next_due":           row["next_due"].strip(),
+                "payment_method":     row.get("payment_method", "").strip(),
+                "auto_debit":         str(row.get("auto_debit", "false")).lower() in ("true", "1", "yes"),
+                "paid_current_cycle": str(row.get("paid_current_cycle", "false")).lower() in ("true", "1", "yes"),
+                "notes":              row.get("notes", "").strip(),
+                "active":             str(row.get("active", "true")).lower() not in ("false", "0", "no"),
+            }
+
+            if row_id and row_id in existing_ids:
+                # update existing
+                for j, s in enumerate(services):
+                    if s.id == row_id:
+                        updated_data = s.model_dump()
+                        updated_data.update(payload)
+                        services[j] = Service(**updated_data)
+                        break
+                updated += 1
+            else:
+                # create new
+                created_at = row.get("created_at", "").strip()
+                new_service = Service(**payload)
+                if created_at:
+                    new_service.created_at = created_at
+                if row_id:
+                    new_service.id = row_id
+                services.append(new_service)
+                existing_ids.add(new_service.id)
+                created += 1
+
+        except Exception as e:
+            errors.append(f"Row {i}: {e}")
+            skipped += 1
+
+    save_services(services)
+    return {"created": created, "updated": updated, "skipped": skipped, "errors": errors}
 
 
 app.mount("/", StaticFiles(directory="/app/static", html=True), name="static")
