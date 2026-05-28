@@ -130,5 +130,39 @@ def advance_next_due(service: Service) -> str:
     return next_due.isoformat()
 
 
+def auto_mark_paid() -> List[Service]:
+    """Mark active auto-debit services as paid when their due date has arrived.
+
+    Called by the scheduler at 9 AM IST before building the daily alert so that
+    auto-renewed services never appear in the overdue/due-soon lists.
+
+    Returns the list of services that were just auto-marked (for inclusion in the
+    morning notification message).
+    """
+    services = load_services()
+    today = date.today()
+    marked: List[Service] = []
+
+    for i, s in enumerate(services):
+        if not s.active or not s.auto_debit or s.paid_current_cycle:
+            continue
+        try:
+            due = date.fromisoformat(s.next_due)
+        except ValueError:
+            continue
+        if due <= today:
+            new_due = advance_next_due(s)
+            updated = s.model_dump()
+            updated["paid_current_cycle"] = True
+            updated["next_due"] = new_due
+            services[i] = Service(**updated)
+            marked.append(services[i])
+
+    if marked:
+        save_services(services)
+
+    return marked
+
+
 def get_data_path() -> str:
     return DATA_PATH

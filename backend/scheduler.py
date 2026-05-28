@@ -48,16 +48,32 @@ def get_alert_message(services) -> str | None:
 
 
 def start_scheduler(bot_app, chat_id: str):
-    from storage import load_services
+    from storage import load_services, auto_mark_paid
 
     async def daily_alert():
         try:
+            # Auto-mark paid for services with auto_debit=True whose due date has arrived.
+            # This runs before building the alert so they don't show up as overdue.
+            auto_marked = auto_mark_paid()
+
             services = load_services()
-            msg = get_alert_message(services)
-            if msg:
+            alert_msg = get_alert_message(services)
+
+            parts = []
+
+            if auto_marked:
+                lines = ["✅ *Auto-marked as paid:*"]
+                for s in auto_marked:
+                    lines.append(f"  • {s.name} — ₹{s.amount:,.0f} (next due: {s.next_due})")
+                parts.append("\n".join(lines))
+
+            if alert_msg:
+                parts.append(alert_msg)
+
+            if parts:
                 await bot_app.bot.send_message(
                     chat_id=chat_id,
-                    text=msg,
+                    text="\n\n".join(parts),
                     parse_mode="Markdown",
                 )
         except Exception as e:
