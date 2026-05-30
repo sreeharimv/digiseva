@@ -1,86 +1,153 @@
-import json
-import os
+import calendar
+import uuid
 from datetime import date, datetime, timedelta
 from typing import List, Optional
+
 from models import Service
+from database import get_db
 
-DATA_PATH = os.environ.get("DATA_PATH", "/app/data/digiseva.json")
-
-
-def _load_raw() -> dict:
-    if not os.path.exists(DATA_PATH):
-        os.makedirs(os.path.dirname(DATA_PATH), exist_ok=True)
-        _save_raw({"services": []})
-        return {"services": []}
-    with open(DATA_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+# Columns allowed in dynamic UPDATE statements — guards against injection from internal callers
+_UPDATABLE = {
+    "name", "type", "category", "amount", "currency", "cycle", "next_due",
+    "payment_method", "auto_debit", "paid_current_cycle", "notes", "active",
+    "tenure_months", "paid_instalments", "credit_limit", "outstanding_balance",
+    "statement_amount",
+}
 
 
-def _save_raw(data: dict) -> None:
-    os.makedirs(os.path.dirname(DATA_PATH), exist_ok=True)
-    with open(DATA_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _row_to_service(row) -> Service:
+    d = dict(row)
+    d["auto_debit"] = bool(d["auto_debit"])
+    d["paid_current_cycle"] = bool(d["paid_current_cycle"])
+    d["active"] = bool(d["active"])
+    return Service(**d)
 
 
-def _reset_overdue(services: List[dict]) -> List[dict]:
-    today = date.today()
-    for s in services:
-        if not s.get("paid_current_cycle", False):
-            continue
-        try:
-            due = date.fromisoformat(s["next_due"])
-            if today > due:
-                s["paid_current_cycle"] = False
-        except (ValueError, KeyError):
-            pass
-    return services
+def _reset_overdue(conn) -> None:
+    """Reset paid_current_cycle for entries whose next_due has passed.
 
+    This is the cycle-rollover logic: once the period you paid for has elapsed,
+    the next period is due again.
+    """
+    conn.execute(
+        "UPDATE services SET paid_current_cycle = 0 "
+        "WHERE paid_current_cycle = 1 AND next_due < date('now')"
+    )
+
+
+# ---------------------------------------------------------------------------
+# CRUD
+# ---------------------------------------------------------------------------
 
 def load_services() -> List[Service]:
-    raw = _load_raw()
-    services = _reset_overdue(raw.get("services", []))
-    _save_raw({"services": services})
-    return [Service(**s) for s in services]
-
-
-def save_services(services: List[Service]) -> None:
-    _save_raw({"services": [s.model_dump() for s in services]})
+    with get_db() as conn:
+        _reset_overdue(conn)
+        rows = conn.execute("SELECT * FROM services").fetchall()
+    return [_row_to_service(r) for r in rows]
 
 
 def get_service(service_id: str) -> Optional[Service]:
-    for s in load_services():
-        if s.id == service_id:
-            return s
-    return None
+    with get_db() as conn:
+        _reset_overdue(conn)
+        row = conn.execute(
+            "SELECT * FROM services WHERE id = ?", (service_id,)
+        ).fetchone()
+    return _row_to_service(row) if row else None
 
 
 def add_service(service: Service) -> Service:
-    services = load_services()
-    services.append(service)
-    save_services(services)
+    d = service.model_dump()
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO services (
+                id, name, type, category, amount, currency, cycle, next_due,
+                payment_method, auto_debit, paid_current_cycle, notes, active, created_at,
+                tenure_months, paid_instalments, credit_limit, outstanding_balance, statement_amount
+            ) VALUES (
+                :id, :name, :type, :category, :amount, :currency, :cycle, :next_due,
+                :payment_method, :auto_debit, :paid_current_cycle, :notes, :active, :created_at,
+                :tenure_months, :paid_instalments, :credit_limit, :outstanding_balance, :statement_amount
+            )
+        """, d)
     return service
 
 
 def update_service(service_id: str, updates: dict) -> Optional[Service]:
-    services = load_services()
-    for i, s in enumerate(services):
-        if s.id == service_id:
-            updated = s.model_dump()
-            updated.update({k: v for k, v in updates.items() if v is not None})
-            services[i] = Service(**updated)
-            save_services(services)
-            return services[i]
-    return None
+    # Strip unknown columns and explicit None values (but keep False / 0 / "")
+    clean = {k: v for k, v in updates.items() if k in _UPDATABLE and v is not None}
+    if not clean:
+        return get_service(service_id)
+    set_clause = ", ".join(f"{k} = :{k}" for k in clean)
+    clean["_id"] = service_id
+    with get_db() as conn:
+        conn.execute(f"UPDATE services SET {set_clause} WHERE id = :_id", clean)
+        row = conn.execute(
+            "SELECT * FROM services WHERE id = ?", (service_id,)
+        ).fetchone()
+    return _row_to_service(row) if row else None
 
 
 def delete_service(service_id: str) -> bool:
-    services = load_services()
-    filtered = [s for s in services if s.id != service_id]
-    if len(filtered) == len(services):
-        return False
-    save_services(filtered)
-    return True
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM services WHERE id = ?", (service_id,))
+    return cursor.rowcount > 0
 
+
+def save_services(services: List[Service]) -> None:
+    """Bulk upsert — used by the CSV import endpoint."""
+    with get_db() as conn:
+        for s in services:
+            d = s.model_dump()
+            conn.execute("""
+                INSERT OR REPLACE INTO services (
+                    id, name, type, category, amount, currency, cycle, next_due,
+                    payment_method, auto_debit, paid_current_cycle, notes, active, created_at,
+                    tenure_months, paid_instalments, credit_limit, outstanding_balance, statement_amount
+                ) VALUES (
+                    :id, :name, :type, :category, :amount, :currency, :cycle, :next_due,
+                    :payment_method, :auto_debit, :paid_current_cycle, :notes, :active, :created_at,
+                    :tenure_months, :paid_instalments, :credit_limit, :outstanding_balance, :statement_amount
+                )
+            """, d)
+
+
+# ---------------------------------------------------------------------------
+# Payment history (credit cards)
+# ---------------------------------------------------------------------------
+
+def add_payment_history(service_id: str, amount_paid: float, notes: str = "") -> dict:
+    record = {
+        "id": str(uuid.uuid4()),
+        "service_id": service_id,
+        "amount_paid": amount_paid,
+        "paid_at": datetime.now().isoformat(),
+        "notes": notes,
+    }
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO payment_history (id, service_id, amount_paid, paid_at, notes) "
+            "VALUES (:id, :service_id, :amount_paid, :paid_at, :notes)",
+            record,
+        )
+    return record
+
+
+def get_payment_history(service_id: str) -> List[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM payment_history WHERE service_id = ? ORDER BY paid_at DESC",
+            (service_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Cycle advancement
+# ---------------------------------------------------------------------------
 
 def advance_next_due(service: Service) -> str:
     cycle = service.cycle
@@ -95,28 +162,24 @@ def advance_next_due(service: Service) -> str:
         month = current.month + 1
         year = current.year + (month - 1) // 12
         month = ((month - 1) % 12) + 1
-        import calendar
         day = min(current.day, calendar.monthrange(year, month)[1])
         next_due = date(year, month, day)
     elif cycle == "bi-monthly":
         month = current.month + 2
         year = current.year + (month - 1) // 12
         month = ((month - 1) % 12) + 1
-        import calendar
         day = min(current.day, calendar.monthrange(year, month)[1])
         next_due = date(year, month, day)
     elif cycle == "quarterly":
         month = current.month + 3
         year = current.year + (month - 1) // 12
         month = ((month - 1) % 12) + 1
-        import calendar
         day = min(current.day, calendar.monthrange(year, month)[1])
         next_due = date(year, month, day)
     elif cycle == "half-yearly":
         month = current.month + 6
         year = current.year + (month - 1) // 12
         month = ((month - 1) % 12) + 1
-        import calendar
         day = min(current.day, calendar.monthrange(year, month)[1])
         next_due = date(year, month, day)
     elif cycle == "yearly":
@@ -130,39 +193,52 @@ def advance_next_due(service: Service) -> str:
     return next_due.isoformat()
 
 
+# ---------------------------------------------------------------------------
+# Scheduler helper
+# ---------------------------------------------------------------------------
+
 def auto_mark_paid() -> List[Service]:
     """Mark active auto-debit services as paid when their due date has arrived.
 
-    Called by the scheduler at 9 AM IST before building the daily alert so that
-    auto-renewed services never appear in the overdue/due-soon lists.
+    For EMI entries: increments paid_instalments and deactivates the entry when
+    the full tenure is complete.
 
-    Returns the list of services that were just auto-marked (for inclusion in the
-    morning notification message).
+    Returns the list of services just auto-marked (used in the morning notification).
     """
-    services = load_services()
-    today = date.today()
+    today = date.today().isoformat()
     marked: List[Service] = []
 
-    for i, s in enumerate(services):
-        if not s.active or not s.auto_debit or s.paid_current_cycle:
-            continue
-        try:
-            due = date.fromisoformat(s.next_due)
-        except ValueError:
-            continue
-        if due <= today:
-            new_due = advance_next_due(s)
-            updated = s.model_dump()
-            updated["paid_current_cycle"] = True
-            updated["next_due"] = new_due
-            services[i] = Service(**updated)
-            marked.append(services[i])
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT * FROM services
+            WHERE active = 1 AND auto_debit = 1 AND paid_current_cycle = 0
+            AND next_due <= ?
+        """, (today,)).fetchall()
 
-    if marked:
-        save_services(services)
+        for row in rows:
+            s = _row_to_service(row)
+            new_due = advance_next_due(s)
+            updates: dict = {"paid_current_cycle": 1, "next_due": new_due}
+
+            # EMI: track instalments, auto-close when tenure completes
+            if s.tenure_months is not None:
+                new_paid = s.paid_instalments + 1
+                updates["paid_instalments"] = new_paid
+                if new_paid >= s.tenure_months:
+                    updates["active"] = 0
+
+            set_clause = ", ".join(f"{k} = :{k}" for k in updates)
+            updates["_id"] = s.id
+            conn.execute(f"UPDATE services SET {set_clause} WHERE id = :_id", updates)
+
+            updated_row = conn.execute(
+                "SELECT * FROM services WHERE id = ?", (s.id,)
+            ).fetchone()
+            marked.append(_row_to_service(updated_row))
 
     return marked
 
 
-def get_data_path() -> str:
-    return DATA_PATH
+def get_db_path() -> str:
+    from database import DB_PATH
+    return DB_PATH

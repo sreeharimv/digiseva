@@ -1,4 +1,3 @@
-import asyncio
 import csv
 import io
 import logging
@@ -11,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from models import Service, ServiceCreate, ServiceUpdate
+from models import Service, ServiceCreate, ServiceUpdate, PaymentRecord
 from storage import (
     load_services,
     save_services,
@@ -20,6 +19,8 @@ from storage import (
     update_service,
     delete_service,
     advance_next_due,
+    add_payment_history,
+    get_payment_history,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -29,13 +30,24 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
 
 _bot_app = None
-_bot_task = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _bot_app, _bot_task
+    global _bot_app
 
+    # --- Database init + one-time JSON → SQLite migration ---
+    from database import init_db
+    init_db()
+    try:
+        from migrate import run_migration
+        n = run_migration()
+        if n:
+            logger.info(f"Auto-migration: moved {n} service(s) from JSON to SQLite")
+    except Exception as e:
+        logger.warning(f"Migration check failed ({e}) — continuing")
+
+    # --- Telegram bot ---
     _placeholder = {"your_telegram_bot_token", "your_telegram_chat_id", ""}
     if BOT_TOKEN not in _placeholder and CHAT_ID not in _placeholder:
         try:
@@ -68,6 +80,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="DigiSeva", lifespan=lifespan)
 
+
+# ---------------------------------------------------------------------------
+# Services CRUD
+# ---------------------------------------------------------------------------
 
 @app.get("/api/services")
 def list_services(
@@ -104,6 +120,10 @@ def remove_service(service_id: str):
     return {"ok": True}
 
 
+# ---------------------------------------------------------------------------
+# Paid toggle
+# ---------------------------------------------------------------------------
+
 @app.post("/api/services/{service_id}/paid")
 def toggle_paid(service_id: str):
     service = get_service(service_id)
@@ -111,12 +131,80 @@ def toggle_paid(service_id: str):
         raise HTTPException(status_code=404, detail="Service not found")
 
     if service.paid_current_cycle:
+        # Untoggle — revert to unpaid for this cycle
         updated = update_service(service_id, {"paid_current_cycle": False})
     else:
         new_due = advance_next_due(service)
-        updated = update_service(service_id, {"paid_current_cycle": True, "next_due": new_due})
+        extra: dict = {"paid_current_cycle": True, "next_due": new_due}
+
+        # EMI: track instalments; deactivate when tenure is complete
+        if service.tenure_months is not None:
+            new_paid = service.paid_instalments + 1
+            extra["paid_instalments"] = new_paid
+            if new_paid >= service.tenure_months:
+                extra["active"] = False
+
+        updated = update_service(service_id, extra)
 
     return updated.model_dump()
+
+
+# ---------------------------------------------------------------------------
+# Credit card payments
+# ---------------------------------------------------------------------------
+
+@app.post("/api/services/{service_id}/payment")
+def record_payment(service_id: str, data: PaymentRecord):
+    """Record a payment against a credit card's outstanding balance.
+
+    If the payment amount covers the full statement_amount the entry is
+    automatically marked paid for this cycle and next_due is advanced.
+    """
+    service = get_service(service_id)
+    if not service:
+        raise HTTPException(status_code=404, detail="Service not found")
+    if service.category != "Credit Card":
+        raise HTTPException(
+            status_code=400,
+            detail="Payment recording is only supported for Credit Card entries",
+        )
+
+    new_outstanding = max(0.0, service.outstanding_balance - data.amount)
+    updates: dict = {"outstanding_balance": new_outstanding}
+
+    # Auto-mark paid when the full statement is settled
+    if service.statement_amount > 0 and data.amount >= service.statement_amount:
+        updates["paid_current_cycle"] = True
+        updates["next_due"] = advance_next_due(service)
+
+    updated = update_service(service_id, updates)
+    add_payment_history(service_id, data.amount, data.notes)
+
+    return updated.model_dump()
+
+
+@app.get("/api/services/{service_id}/payment-history")
+def payment_history(service_id: str):
+    if not get_service(service_id):
+        raise HTTPException(status_code=404, detail="Service not found")
+    return get_payment_history(service_id)
+
+
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
+
+def _monthly_equiv(s: Service) -> float:
+    """Convert any billing cycle's amount to a monthly equivalent figure."""
+    return {
+        "weekly":      s.amount * 4,
+        "monthly":     s.amount,
+        "bi-monthly":  s.amount / 2,
+        "quarterly":   s.amount / 3,
+        "half-yearly": s.amount / 6,
+        "yearly":      s.amount / 12,
+        "one-time":    0.0,
+    }.get(s.cycle, 0.0)
 
 
 @app.get("/api/summary")
@@ -125,7 +213,8 @@ def summary():
     today = date.today()
     seven_days = today + timedelta(days=7)
 
-    monthly_total = 0.0
+    monthly_income = 0.0
+    monthly_outgo = 0.0
     upcoming = []
     overdue = []
     paid_count = 0
@@ -134,18 +223,12 @@ def summary():
         if not s.active:
             continue
 
-        if s.cycle == "monthly":
-            monthly_total += s.amount
-        elif s.cycle == "weekly":
-            monthly_total += s.amount * 4
-        elif s.cycle == "bi-monthly":
-            monthly_total += s.amount / 2
-        elif s.cycle == "quarterly":
-            monthly_total += s.amount / 3
-        elif s.cycle == "half-yearly":
-            monthly_total += s.amount / 6
-        elif s.cycle == "yearly":
-            monthly_total += s.amount / 12
+        equiv = _monthly_equiv(s)
+        if s.type == "income":
+            monthly_income += equiv
+        else:
+            # subscription, bill, expense all count as outgo
+            monthly_outgo += equiv
 
         if s.paid_current_cycle:
             paid_count += 1
@@ -167,13 +250,32 @@ def summary():
     upcoming.sort(key=lambda x: x["next_due"])
     overdue.sort(key=lambda x: x["next_due"])
 
+    monthly_income = round(monthly_income, 2)
+    monthly_outgo = round(monthly_outgo, 2)
+
     return {
-        "monthly_total": round(monthly_total, 2),
-        "upcoming": upcoming,
-        "overdue": overdue,
-        "paid_count": paid_count,
-        "total_count": len([s for s in services if s.active]),
+        "monthly_income": monthly_income,
+        "monthly_outgo":  monthly_outgo,
+        "net_cashflow":   round(monthly_income - monthly_outgo, 2),
+        "monthly_total":  monthly_outgo,   # backward-compat alias
+        "upcoming":       upcoming,
+        "overdue":        overdue,
+        "paid_count":     paid_count,
+        "total_count":    len([s for s in services if s.active]),
     }
+
+
+# ---------------------------------------------------------------------------
+# CSV export / import
+# ---------------------------------------------------------------------------
+
+_CSV_FIELDS = [
+    "id", "name", "type", "category", "amount", "currency",
+    "cycle", "next_due", "payment_method", "auto_debit",
+    "paid_current_cycle", "notes", "active", "created_at",
+    "tenure_months", "paid_instalments",
+    "credit_limit", "outstanding_balance", "statement_amount",
+]
 
 
 @app.get("/api/export/csv")
@@ -181,18 +283,10 @@ def export_csv():
     services = load_services()
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow([
-        "id", "name", "type", "category", "amount", "currency",
-        "cycle", "next_due", "payment_method", "auto_debit",
-        "paid_current_cycle", "notes", "active", "created_at"
-    ])
+    writer.writerow(_CSV_FIELDS)
     for s in services:
         d = s.model_dump()
-        writer.writerow([d[k] for k in [
-            "id", "name", "type", "category", "amount", "currency",
-            "cycle", "next_due", "payment_method", "auto_debit",
-            "paid_current_cycle", "notes", "active", "created_at"
-        ]])
+        writer.writerow([d[k] for k in _CSV_FIELDS])
     output.seek(0)
     return StreamingResponse(
         iter([output.getvalue()]),
@@ -217,38 +311,53 @@ async def import_csv(file: UploadFile = File(...)):
     services = load_services()
     existing_ids = {s.id for s in services}
 
-    created, updated, skipped = 0, 0, 0
+    created, updated_count, skipped = 0, 0, 0
     errors = []
 
     for i, row in enumerate(reader, start=2):
         try:
             row_id = row.get("id", "").strip()
+
+            def _bool(key, default="false"):
+                return str(row.get(key, default)).lower() in ("true", "1", "yes")
+
+            def _opt_int(key):
+                v = row.get(key, "").strip()
+                return int(v) if v else None
+
+            def _opt_float(key):
+                v = row.get(key, "").strip()
+                return float(v) if v else None
+
             payload = {
-                "name":               row["name"].strip(),
-                "type":               row["type"].strip(),
-                "category":           row["category"].strip(),
-                "amount":             float(row["amount"]),
-                "currency":           row.get("currency", "INR").strip() or "INR",
-                "cycle":              row["cycle"].strip(),
-                "next_due":           row["next_due"].strip(),
-                "payment_method":     row.get("payment_method", "").strip(),
-                "auto_debit":         str(row.get("auto_debit", "false")).lower() in ("true", "1", "yes"),
-                "paid_current_cycle": str(row.get("paid_current_cycle", "false")).lower() in ("true", "1", "yes"),
-                "notes":              row.get("notes", "").strip(),
-                "active":             str(row.get("active", "true")).lower() not in ("false", "0", "no"),
+                "name":                row["name"].strip(),
+                "type":                row["type"].strip(),
+                "category":            row["category"].strip(),
+                "amount":              float(row["amount"]),
+                "currency":            row.get("currency", "INR").strip() or "INR",
+                "cycle":               row["cycle"].strip(),
+                "next_due":            row["next_due"].strip(),
+                "payment_method":      row.get("payment_method", "").strip(),
+                "auto_debit":          _bool("auto_debit"),
+                "paid_current_cycle":  _bool("paid_current_cycle"),
+                "notes":               row.get("notes", "").strip(),
+                "active":              str(row.get("active", "true")).lower() not in ("false", "0", "no"),
+                "tenure_months":       _opt_int("tenure_months"),
+                "paid_instalments":    int(row.get("paid_instalments", 0) or 0),
+                "credit_limit":        _opt_float("credit_limit"),
+                "outstanding_balance": float(row.get("outstanding_balance", 0) or 0),
+                "statement_amount":    float(row.get("statement_amount", 0) or 0),
             }
 
             if row_id and row_id in existing_ids:
-                # update existing
                 for j, s in enumerate(services):
                     if s.id == row_id:
                         updated_data = s.model_dump()
                         updated_data.update(payload)
                         services[j] = Service(**updated_data)
                         break
-                updated += 1
+                updated_count += 1
             else:
-                # create new
                 created_at = row.get("created_at", "").strip()
                 new_service = Service(**payload)
                 if created_at:
@@ -264,7 +373,7 @@ async def import_csv(file: UploadFile = File(...)):
             skipped += 1
 
     save_services(services)
-    return {"created": created, "updated": updated, "skipped": skipped, "errors": errors}
+    return {"created": created, "updated": updated_count, "skipped": skipped, "errors": errors}
 
 
 app.mount("/", StaticFiles(directory="/app/static", html=True), name="static")

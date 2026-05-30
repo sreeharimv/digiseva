@@ -4,9 +4,11 @@ from datetime import datetime
 import uuid
 
 
-ServiceType = Literal["subscription", "bill"]
+ServiceType = Literal["subscription", "bill", "income", "expense"]
 SubscriptionCategory = Literal["OTT", "Cloud", "AI", "Telecom", "Domain", "VPN", "Software", "Other"]
 BillCategory = Literal["Electricity", "FTTH", "LPG", "DTH", "Water", "Maintenance", "Other"]
+IncomeCategory = Literal["Salary", "Freelance", "Rental", "Dividend", "Other"]
+ExpenseCategory = Literal["EMI", "Credit Card", "Misc", "Other"]
 Cycle = Literal["weekly", "monthly", "bi-monthly", "quarterly", "half-yearly", "yearly", "one-time"]
 
 
@@ -25,6 +27,13 @@ class Service(BaseModel):
     notes: str = ""
     active: bool = True
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    # EMI fields (populated only for category="EMI")
+    tenure_months: Optional[int] = None
+    paid_instalments: int = 0
+    # Credit card fields (populated only for category="Credit Card")
+    credit_limit: Optional[float] = None
+    outstanding_balance: float = 0.0
+    statement_amount: float = 0.0
 
 
 class ServiceCreate(BaseModel):
@@ -39,6 +48,10 @@ class ServiceCreate(BaseModel):
     auto_debit: bool = False
     notes: str = ""
     active: bool = True
+    tenure_months: Optional[int] = None
+    credit_limit: Optional[float] = None
+    outstanding_balance: float = 0.0
+    statement_amount: float = 0.0
 
 
 class ServiceUpdate(BaseModel):
@@ -54,10 +67,24 @@ class ServiceUpdate(BaseModel):
     paid_current_cycle: Optional[bool] = None
     notes: Optional[str] = None
     active: Optional[bool] = None
+    tenure_months: Optional[int] = None
+    paid_instalments: Optional[int] = None
+    credit_limit: Optional[float] = None
+    outstanding_balance: Optional[float] = None
+    statement_amount: Optional[float] = None
+
+
+class PaymentRecord(BaseModel):
+    """Body for POST /api/services/{id}/payment — records a credit card payment."""
+    amount: float
+    notes: str = ""
 
 
 class SummaryResponse(BaseModel):
-    monthly_total: float
+    monthly_income: float
+    monthly_outgo: float
+    net_cashflow: float
+    monthly_total: float  # alias for monthly_outgo — kept for backward compat
     upcoming: list
     overdue: list
     paid_count: int
