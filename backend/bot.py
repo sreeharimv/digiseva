@@ -1,3 +1,5 @@
+import csv
+import io
 import logging
 from datetime import date, timedelta
 from telegram import Update
@@ -13,21 +15,42 @@ DIV = "─" * 22
 CAT_EMOJI = {
     # subscriptions
     "OTT": "🎬", "Cloud": "☁️", "AI": "🤖", "Telecom": "📡",
-    "Domain": "🌐", "VPN": "🔒", "Software": "💻", "Other": "📦",
+    "Domain": "🌐", "VPN": "🔒", "Software": "💻",
     # bills
     "Electricity": "⚡", "FTTH": "🌐", "LPG": "🔥", "DTH": "📺",
     "Water": "💧", "Maintenance": "🔧",
+    # income
+    "Salary": "💼", "Freelance": "🖥️", "Rental": "🏠", "Dividend": "📈",
+    # expense
+    "EMI": "🏦", "Credit Card": "💳", "Misc": "🛒",
+    # fallback
+    "Other": "📦",
+}
+
+CYCLE_SHORT = {
+    "monthly": "/mo", "yearly": "/yr", "weekly": "/wk",
+    "bi-monthly": "/2mo", "quarterly": "/qtr",
+    "half-yearly": "/6mo", "one-time": "",
+}
+
+# Order in which types appear in /list
+_TYPE_ORDER = ["income", "subscription", "bill", "expense"]
+_TYPE_HEADER = {
+    "income":       "💚 *Income*",
+    "subscription": "📦 *Subscriptions*",
+    "bill":         "🧾 *Bills*",
+    "expense":      "💸 *Expenses*",
 }
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 def _monthly_equiv(s) -> float:
-    if s.cycle == "monthly":      return s.amount
-    if s.cycle == "weekly":       return s.amount * 4
-    if s.cycle == "bi-monthly":   return s.amount / 2
-    if s.cycle == "quarterly":    return s.amount / 3
-    if s.cycle == "half-yearly":  return s.amount / 6
-    if s.cycle == "yearly":       return s.amount / 12
-    return 0.0
+    rates = {"monthly": 1, "weekly": 4, "bi-monthly": 0.5,
+             "quarterly": 1/3, "half-yearly": 1/6, "yearly": 1/12, "one-time": 0}
+    return s.amount * rates.get(s.cycle, 0)
 
 
 def _status(s) -> str:
@@ -39,18 +62,27 @@ def _status(s) -> str:
     except ValueError:
         return "unknown"
     diff = (due - today).days
-    if diff < 0:   return "overdue"
-    if diff <= 7:  return "pending"
+    if diff < 0:  return "overdue"
+    if diff <= 7: return "pending"
     return "upcoming"
 
 
-def _due_label(next_due: str) -> str:
+def _try_date(d: str) -> date:
     try:
-        due = date.fromisoformat(next_due)
+        return date.fromisoformat(d)
     except ValueError:
-        return next_due
+        return date.max
+
+
+def _due_label(s) -> str:
+    """Human-readable due/expected label for a service."""
+    try:
+        due = date.fromisoformat(s.next_due)
+    except ValueError:
+        return s.next_due
     diff = (due - date.today()).days
     day_str = due.strftime("%-d %b")
+    verb = "expected" if s.type == "income" else "due"
     if diff < 0:   return f"{day_str} 🔴 ({abs(diff)}d overdue)"
     if diff == 0:  return f"{day_str} ⚠️ (today!)"
     if diff == 1:  return f"{day_str} (tomorrow)"
@@ -64,29 +96,67 @@ def _payment_line(s) -> str:
     return f"   💳 {s.payment_method}{auto}\n"
 
 
-# ── /digiseva ──────────────────────────────────────────────────
+def _send_chunks(text: str, max_len: int = 4000) -> list[str]:
+    """Split a Markdown message into Telegram-safe chunks (≤ max_len chars)."""
+    if len(text) <= max_len:
+        return [text]
+    chunks, current, current_len = [], [], 0
+    for line in text.split("\n"):
+        line_len = len(line) + 1
+        if current_len + line_len > max_len and current:
+            chunks.append("\n".join(current))
+            current, current_len = [line], line_len
+        else:
+            current.append(line)
+            current_len += line_len
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
+
+
+# ---------------------------------------------------------------------------
+# /summary (overview)
+# ---------------------------------------------------------------------------
+
 def _build_summary(services) -> str:
     today = date.today()
-    seven = today + timedelta(days=7)
-    monthly = 0.0
     active = [s for s in services if s.active]
-    subs = [s for s in active if s.type == "subscription"]
-    bills = [s for s in active if s.type == "bill"]
+
+    monthly_income = 0.0
+    monthly_outgo = 0.0
     paid_list, pending_list, overdue_list = [], [], []
+    by_type: dict = {}
 
     for s in active:
-        monthly += _monthly_equiv(s)
+        equiv = _monthly_equiv(s)
+        if s.type == "income":
+            monthly_income += equiv
+        else:
+            monthly_outgo += equiv
+
+        by_type[s.type] = by_type.get(s.type, 0) + 1
+
         st = _status(s)
-        if st == "paid":    paid_list.append(s)
+        if st == "paid":     paid_list.append(s)
         elif st == "overdue": overdue_list.append(s)
         elif st == "pending": pending_list.append(s)
+
+    net = monthly_income - monthly_outgo
+    net_arrow = "▲" if net >= 0 else "▼"
+
+    type_parts = []
+    for k in _TYPE_ORDER:
+        if k in by_type:
+            type_parts.append(f"{by_type[k]} {k}")
 
     lines = [
         "📊 *DigiSeva Overview*",
         DIV,
-        f"💰 *Monthly burn:* ₹{monthly:,.0f}",
+        f"💚 *Income:*  ₹{monthly_income:,.0f}/mo",
+        f"💸 *Outgo:*   ₹{monthly_outgo:,.0f}/mo",
+        f"📈 *Net:*     {net_arrow} ₹{abs(net):,.0f}/mo",
         "",
-        f"📦 *Active:* {len(active)}  ({len(subs)} subscriptions · {len(bills)} bills)",
+        f"📦 *Active:* {len(active)}  ({' · '.join(type_parts)})",
         "",
         f"✅ Paid this cycle:  {len(paid_list)}",
         f"⏳ Due in 7 days:    {len(pending_list)}",
@@ -108,7 +178,10 @@ def _build_summary(services) -> str:
     return "\n".join(lines)
 
 
-# ── /digiseva due ──────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# /due
+# ---------------------------------------------------------------------------
+
 def _build_due(services) -> str:
     today = date.today()
     seven = today + timedelta(days=7)
@@ -133,6 +206,7 @@ def _build_due(services) -> str:
         diff = (d - today).days
         day_lbl = "today ⚠️" if diff == 0 else ("tomorrow" if diff == 1 else f"in {diff}d")
         num = nums[i] if i < len(nums) else f"{i+1}."
+        verb = "Expected" if s.type == "income" else "Due"
         lines.append(f"{num} *{s.name}*  — ₹{s.amount:,.0f}")
         lines.append(f"   {s.category} · {s.cycle}")
         lines.append(_payment_line(s).rstrip())
@@ -141,7 +215,10 @@ def _build_due(services) -> str:
     return "\n".join(lines).strip()
 
 
-# ── /digiseva overdue ──────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# /overdue
+# ---------------------------------------------------------------------------
+
 def _build_overdue(services) -> str:
     today = date.today()
     items = []
@@ -162,170 +239,212 @@ def _build_overdue(services) -> str:
     lines = [f"🔴 *Overdue*  ({len(items)} items)", DIV, ""]
     for d, s in items:
         days_late = (today - d).days
+        verb = "Expected" if s.type == "income" else "Was due"
         lines.append(f"⚠️ *{s.name}*  — ₹{s.amount:,.0f}")
         lines.append(f"   {s.category} · {s.cycle}")
         lines.append(_payment_line(s).rstrip())
-        lines.append(f"   📅 Was due {d.strftime('%-d %b')}  ({days_late}d ago)")
+        lines.append(f"   📅 {verb} {d.strftime('%-d %b')}  ({days_late}d ago)")
         lines.append("")
     return "\n".join(lines).strip()
 
 
-# ── /digiseva monthly ──────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# /monthly
+# ---------------------------------------------------------------------------
+
 def _build_monthly(services) -> str:
     from collections import defaultdict
-    cat_totals: dict = defaultdict(float)
-    grand = 0.0
+    income_cats: dict = defaultdict(float)
+    outgo_cats: dict = defaultdict(float)
+    income_total = outgo_total = 0.0
+
     for s in services:
         if not s.active:
             continue
         m = _monthly_equiv(s)
-        if m > 0:
-            cat_totals[s.category] += m
-            grand += m
+        if m <= 0:
+            continue
+        if s.type == "income":
+            income_cats[s.category] += m
+            income_total += m
+        else:
+            outgo_cats[s.category] += m
+            outgo_total += m
 
-    if not cat_totals:
-        return "No active services found."
+    if not income_cats and not outgo_cats:
+        return "No active entries found."
 
-    lines = ["📅 *Monthly Breakdown*", DIV, f"💰 *Total:* ₹{grand:,.0f}/mo", ""]
-    sorted_cats = sorted(cat_totals.items(), key=lambda x: -x[1])
-    max_amt = sorted_cats[0][1]
-    for cat, amt in sorted_cats:
-        pct = (amt / grand * 100)
-        bar_len = int(amt / max_amt * 10)
-        bar = "█" * bar_len + "░" * (10 - bar_len)
-        lines.append(f"`{bar}` {pct:4.0f}%")
-        lines.append(f"   *{cat}*  ₹{amt:,.0f}/mo")
-        lines.append("")
+    lines = ["📅 *Monthly Breakdown*", DIV]
+
+    if income_cats:
+        lines += ["", f"💚 *Income:* ₹{income_total:,.0f}/mo"]
+        for cat, amt in sorted(income_cats.items(), key=lambda x: -x[1]):
+            pct = amt / income_total * 100
+            lines.append(f"   {CAT_EMOJI.get(cat, '📌')} {cat}  ₹{amt:,.0f}  ({pct:.0f}%)")
+
+    if outgo_cats:
+        lines += ["", f"💸 *Outgo:* ₹{outgo_total:,.0f}/mo"]
+        sorted_outgo = sorted(outgo_cats.items(), key=lambda x: -x[1])
+        max_amt = sorted_outgo[0][1]
+        for cat, amt in sorted_outgo:
+            pct = amt / outgo_total * 100
+            bar_len = int(amt / max_amt * 10)
+            bar = "█" * bar_len + "░" * (10 - bar_len)
+            lines.append(f"`{bar}` {pct:4.0f}%")
+            lines.append(f"   *{cat}*  ₹{amt:,.0f}/mo")
+            lines.append("")
+
+    net = income_total - outgo_total
+    lines += [DIV, f"📈 *Net cashflow:* ₹{net:+,.0f}/mo"]
     return "\n".join(lines).strip()
 
 
-# ── /digiseva paid ─────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# /paid prompt
+# ---------------------------------------------------------------------------
+
 def _build_paid_prompt(services) -> tuple[str, dict]:
-    today = date.today()
-    pending = []
-    for s in services:
-        if s.active and not s.paid_current_cycle:
-            pending.append(s)
-    # sort: overdue first, then by due date
-    def sort_key(s):
-        try:
-            d = date.fromisoformat(s.next_due)
-        except ValueError:
-            d = date.today()
-        return d
-    pending.sort(key=sort_key)
+    pending = [s for s in services if s.active and not s.paid_current_cycle]
+    pending.sort(key=lambda s: _try_date(s.next_due))
 
     if not pending:
-        return "✅ Nothing pending — all paid!", {}
+        return "✅ Nothing pending — all paid / received!", {}
 
-    index_map = {}  # "1" -> service_id
-    lines = ["💳 *Mark as Paid*", DIV, "Reply with a number:\n"]
+    index_map: dict = {}
+    lines = ["💳 *Mark as Paid / Received*", DIV, "Reply with a number:\n"]
     for i, s in enumerate(pending, 1):
         index_map[str(i)] = s.id
         st = _status(s)
         flag = " 🔴" if st == "overdue" else (" ⏳" if st == "pending" else "")
-        lines.append(f"*{i}.* {s.name}  — ₹{s.amount:,.0f}{flag}")
-        lines.append(f"   {s.category} · 📅 {_due_label(s.next_due)}")
+        income_tag = " 💚" if s.type == "income" else ""
+        lines.append(f"*{i}.* {s.name}  — ₹{s.amount:,.0f}{flag}{income_tag}")
+        lines.append(f"   {s.category} · 📅 {_due_label(s)}")
         lines.append("")
     return "\n".join(lines).strip(), index_map
 
 
-# ── /list ─────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# /list
+# ---------------------------------------------------------------------------
+
 def _build_list(services) -> str:
     from collections import defaultdict
     today = date.today()
     active = [s for s in services if s.active]
 
-    # group by category, preserve insertion order within each
-    by_cat: dict = defaultdict(list)
+    # Group by type → category
+    by_type_cat: dict = defaultdict(lambda: defaultdict(list))
     for s in active:
-        by_cat[s.category].append(s)
+        by_type_cat[s.type][s.category].append(s)
 
-    # sort categories: subscriptions first (by total amount desc), then bills
-    def cat_sort_key(cat_services):
-        first = cat_services[0]
-        type_order = 0 if first.type == "subscription" else 1
-        total = sum(s.amount for s in cat_services)
-        return (type_order, -total)
+    lines = [f"📋 *All Entries*  ({len(active)} total)", DIV]
 
-    lines = [f"📋 *All Services*  ({len(active)} total)", DIV, ""]
-
-    for cat, items in sorted(by_cat.items(), key=lambda x: cat_sort_key(x[1])):
-        icon = CAT_EMOJI.get(cat, "📌")
-        lines.append(f"{icon} *{cat}* ({len(items)})")
-
-        # sort within category: overdue → pending → upcoming → paid
-        def item_sort(s):
-            st = _status(s)
-            order = {"overdue": 0, "pending": 1, "upcoming": 2, "paid": 3}
-            return (order.get(st, 9), s.next_due)
-
-        for s in sorted(items, key=item_sort):
-            st = _status(s)
-            status_icon = {"paid": "✅", "pending": "⏳", "overdue": "🔴", "upcoming": "🔵"}.get(st, "🔵")
-
-            # amount label
-            cycle_short = {"monthly": "/mo", "yearly": "/yr", "weekly": "/wk",
-                           "bi-monthly": "/2mo", "quarterly": "/qtr",
-                           "half-yearly": "/6mo", "one-time": ""}.get(s.cycle, "")
-            amt = f"₹{s.amount:,.0f}{cycle_short}"
-
-            # due label
-            due = _try_date(s.next_due)
-            due_str = due.strftime("%-d %b %Y") if due != date.max else s.next_due
-            if st == "paid":
-                due_label = f"next {due_str}"
-            elif st == "overdue":
-                days = (today - due).days
-                due_label = f"overdue {days}d"
-            elif st == "pending":
-                days = (due - today).days
-                due_label = f"due {'today' if days == 0 else f'in {days}d'}"
-            else:
-                due_label = f"due {due_str}"
-
-            lines.append(f"  {status_icon} {s.name}  •  {amt}  •  {due_label}")
-
+    for type_key in _TYPE_ORDER:
+        if type_key not in by_type_cat:
+            continue
+        by_cat = by_type_cat[type_key]
         lines.append("")
+        lines.append(_TYPE_HEADER.get(type_key, f"*{type_key.title()}*"))
+
+        # Sort categories by total amount desc
+        sorted_cats = sorted(by_cat.items(), key=lambda x: -sum(s.amount for s in x[1]))
+
+        for cat, items in sorted_cats:
+            icon = CAT_EMOJI.get(cat, "📌")
+            lines.append(f"\n{icon} *{cat}* ({len(items)})")
+
+            def item_sort(s):
+                order = {"overdue": 0, "pending": 1, "upcoming": 2, "paid": 3}
+                return (order.get(_status(s), 9), s.next_due)
+
+            for s in sorted(items, key=item_sort):
+                st = _status(s)
+
+                if s.type == "income":
+                    status_icon = "✅" if s.paid_current_cycle else "💰"
+                else:
+                    status_icon = {"paid": "✅", "pending": "⏳", "overdue": "🔴", "upcoming": "🔵"}.get(st, "🔵")
+
+                cycle_short = CYCLE_SHORT.get(s.cycle, "")
+                amt = f"₹{s.amount:,.0f}{cycle_short}"
+
+                # Extra info for EMI / credit card
+                extra = ""
+                if s.tenure_months:
+                    remaining = s.tenure_months - s.paid_instalments
+                    extra = f"  [{s.paid_instalments}/{s.tenure_months}, {remaining} left]"
+                elif s.category == "Credit Card" and s.outstanding_balance > 0:
+                    extra = f"  [₹{s.outstanding_balance:,.0f} outstanding]"
+
+                # Due / expected label
+                due = _try_date(s.next_due)
+                due_str = due.strftime("%-d %b %Y") if due != date.max else s.next_due
+                verb = "expected" if s.type == "income" else "due"
+
+                if st == "paid":
+                    due_label = f"next {due_str}"
+                elif st == "overdue":
+                    days = (today - due).days
+                    due_label = f"{verb} {days}d ago"
+                elif st == "pending":
+                    days = (due - today).days
+                    due_label = f"{verb} {'today' if days == 0 else f'in {days}d'}"
+                else:
+                    due_label = f"{verb} {due_str}"
+
+                lines.append(f"  {status_icon} {s.name}  •  {amt}  •  {due_label}{extra}")
 
     return "\n".join(lines).strip()
 
 
-# ── Help text ──────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Help text
+# ---------------------------------------------------------------------------
+
 HELP_TEXT = f"""\
 🤖 *DigiSeva Commands*
 {DIV}
-/summary — Overview & status
-/list — All services by category
+/summary — Overview, net cashflow & alerts
+/list — All entries by type & category
 /due — Items due in next 7 days
-/overdue — Unpaid overdue items
-/paid — Mark an item as paid
-/monthly — Spend by category
-/export — Download data as JSON
+/overdue — Unpaid / unreceived overdue items
+/paid — Mark an item as paid / received
+/monthly — Income & spend by category
+/export — Download data as CSV
 /help — Show this message\
 """
 
 
-# ── Individual command handlers ────────────────────────────────
+# ---------------------------------------------------------------------------
+# Command handlers
+# ---------------------------------------------------------------------------
+
 async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import load_services
     await update.message.reply_text(_build_summary(load_services()), parse_mode="Markdown")
+
 
 async def cmd_due(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import load_services
     await update.message.reply_text(_build_due(load_services()), parse_mode="Markdown")
 
+
 async def cmd_overdue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import load_services
     await update.message.reply_text(_build_overdue(load_services()), parse_mode="Markdown")
 
+
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import load_services
-    await update.message.reply_text(_build_list(load_services()), parse_mode="Markdown")
+    text = _build_list(load_services())
+    for chunk in _send_chunks(text):
+        await update.message.reply_text(chunk, parse_mode="Markdown")
+
 
 async def cmd_monthly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import load_services
     await update.message.reply_text(_build_monthly(load_services()), parse_mode="Markdown")
+
 
 async def cmd_paid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import load_services
@@ -335,46 +454,64 @@ async def cmd_paid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _pending_paid_session[chat_id] = index_map
     await update.message.reply_text(msg, parse_mode="Markdown")
 
+
 async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from storage import get_data_path
+    from storage import load_services
     try:
-        with open(get_data_path(), "rb") as f:
-            today = date.today().isoformat()
-            await update.message.reply_document(
-                f,
-                filename=f"digiseva_{today}.json",
-                caption=f"📦 DigiSeva export — {today}"
-            )
-    except FileNotFoundError:
-        await update.message.reply_text("❌ No data file found.")
+        services = load_services()
+        fields = [
+            "id", "name", "type", "category", "amount", "currency",
+            "cycle", "next_due", "payment_method", "auto_debit",
+            "paid_current_cycle", "notes", "active", "created_at",
+            "tenure_months", "paid_instalments",
+            "credit_limit", "outstanding_balance", "statement_amount",
+        ]
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(fields)
+        for s in services:
+            d = s.model_dump()
+            writer.writerow([d[k] for k in fields])
+        output.seek(0)
+        today = date.today().isoformat()
+        await update.message.reply_document(
+            io.BytesIO(output.getvalue().encode("utf-8")),
+            filename=f"digiseva_{today}.csv",
+            caption=f"📦 DigiSeva export — {today} ({len(services)} entries)",
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Export failed: {e}")
+
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
+
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import load_services
     services = load_services()
     active = [s for s in services if s.active]
-    monthly = sum(_monthly_equiv(s) for s in active)
+    monthly_income = sum(_monthly_equiv(s) for s in active if s.type == "income")
+    monthly_outgo = sum(_monthly_equiv(s) for s in active if s.type != "income")
     paid = sum(1 for s in active if s.paid_current_cycle)
     today = date.today()
-    overdue = sum(
-        1 for s in active
-        if not s.paid_current_cycle
-        and _try_date(s.next_due) < today
-    )
+    overdue = sum(1 for s in active if not s.paid_current_cycle and _try_date(s.next_due) < today)
     due_soon = sum(
         1 for s in active
-        if not s.paid_current_cycle
-        and today <= _try_date(s.next_due) <= today + timedelta(days=7)
+        if not s.paid_current_cycle and today <= _try_date(s.next_due) <= today + timedelta(days=7)
     )
+    net = monthly_income - monthly_outgo
+    net_arrow = "▲" if net >= 0 else "▼"
     name = update.effective_user.first_name or "there"
     msg = (
         f"👋 *Hey {name}!*\n"
         f"{DIV}\n"
-        f"DigiSeva is tracking *{len(active)} services* for you.\n"
+        f"DigiSeva is tracking *{len(active)} entries* for you.\n"
         f"\n"
-        f"💰 Monthly burn:  *₹{monthly:,.0f}*\n"
+        f"💚 Income:      *₹{monthly_income:,.0f}/mo*\n"
+        f"💸 Outgo:       *₹{monthly_outgo:,.0f}/mo*\n"
+        f"📈 Net:         *{net_arrow} ₹{abs(net):,.0f}/mo*\n"
+        f"\n"
         f"✅ Paid this cycle:  {paid}\n"
         f"⏳ Due in 7 days:   {due_soon}\n"
         f"🔴 Overdue:         {overdue}\n"
@@ -387,16 +524,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 
-def _try_date(d: str) -> date:
-    try:
-        return date.fromisoformat(d)
-    except ValueError:
-        return date.max
+# ---------------------------------------------------------------------------
+# Paid reply handler
+# ---------------------------------------------------------------------------
 
-
-# ── Paid reply handler ─────────────────────────────────────────
 async def handle_paid_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from storage import load_services, save_services, advance_next_due
+    from storage import get_service, update_service, advance_next_due
 
     chat_id = str(update.effective_chat.id)
     if chat_id not in _pending_paid_session:
@@ -408,28 +541,48 @@ async def handle_paid_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if text not in index_map:
         keys = ", ".join(index_map.keys())
         await update.message.reply_text(
-            f"❓ Please reply with one of: {keys}\n\nOr /digiseva to cancel.",
-            parse_mode="Markdown"
+            f"❓ Please reply with one of: {keys}\n\nOr /paid to restart."
         )
         return
 
     service_id = index_map[text]
-    services = load_services()
-    for i, s in enumerate(services):
-        if s.id == service_id:
-            new_due = advance_next_due(s)
-            services[i].paid_current_cycle = True
-            services[i].next_due = new_due
-            save_services(services)
-            del _pending_paid_session[chat_id]
-            await update.message.reply_text(
-                f"✅ *{s.name}* marked as paid\n"
-                f"   ₹{s.amount:,.0f} · {s.category}\n"
-                f"   📅 Next due: {new_due}",
-                parse_mode="Markdown"
-            )
-            return
+    s = get_service(service_id)
+    if not s:
+        await update.message.reply_text("❌ Service not found.")
+        del _pending_paid_session[chat_id]
+        return
 
+    new_due = advance_next_due(s)
+    extra: dict = {"paid_current_cycle": True, "next_due": new_due}
+
+    # EMI: increment instalment counter; auto-close on completion
+    completion_msg = ""
+    if s.tenure_months is not None:
+        new_paid = s.paid_instalments + 1
+        extra["paid_instalments"] = new_paid
+        if new_paid >= s.tenure_months:
+            extra["active"] = False
+            completion_msg = f"\n   🎉 EMI fully paid! ({s.tenure_months}/{s.tenure_months} instalments)"
+        else:
+            remaining = s.tenure_months - new_paid
+            completion_msg = f"\n   📊 Progress: {new_paid}/{s.tenure_months} paid · {remaining} remaining"
+
+    update_service(service_id, extra)
+    del _pending_paid_session[chat_id]
+
+    verb = "received" if s.type == "income" else "paid"
+    await update.message.reply_text(
+        f"✅ *{s.name}* marked as {verb}\n"
+        f"   ₹{s.amount:,.0f} · {s.category}\n"
+        f"   📅 Next due: {new_due}"
+        f"{completion_msg}",
+        parse_mode="Markdown",
+    )
+
+
+# ---------------------------------------------------------------------------
+# App factory
+# ---------------------------------------------------------------------------
 
 def create_bot_app(token: str) -> Application:
     app = Application.builder().token(token).build()
