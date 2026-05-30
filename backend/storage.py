@@ -43,10 +43,18 @@ def _reset_overdue(conn) -> None:
 # CRUD
 # ---------------------------------------------------------------------------
 
-def load_services() -> List[Service]:
+def load_services(include_inactive: bool = False) -> List[Service]:
+    """Load services from the database.
+
+    By default only active entries are returned. Pass include_inactive=True
+    to also include entries where active=0 (e.g. for CSV export or admin views).
+    """
     with get_db() as conn:
         _reset_overdue(conn)
-        rows = conn.execute("SELECT * FROM services").fetchall()
+        if include_inactive:
+            rows = conn.execute("SELECT * FROM services").fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM services WHERE active = 1").fetchall()
     return [_row_to_service(r) for r in rows]
 
 

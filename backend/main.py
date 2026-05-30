@@ -89,8 +89,9 @@ app = FastAPI(title="DigiSeva", lifespan=lifespan)
 def list_services(
     type: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
+    include_inactive: bool = Query(False),
 ):
-    services = load_services()
+    services = load_services(include_inactive=include_inactive)
     if type:
         services = [s for s in services if s.type == type]
     if category:
@@ -220,9 +221,6 @@ def summary():
     paid_count = 0
 
     for s in services:
-        if not s.active:
-            continue
-
         equiv = _monthly_equiv(s)
         if s.type == "income":
             monthly_income += equiv
@@ -261,7 +259,7 @@ def summary():
         "upcoming":       upcoming,
         "overdue":        overdue,
         "paid_count":     paid_count,
-        "total_count":    len([s for s in services if s.active]),
+        "total_count":    len(services),  # load_services() already filters active-only
     }
 
 
@@ -280,7 +278,7 @@ _CSV_FIELDS = [
 
 @app.get("/api/export/csv")
 def export_csv():
-    services = load_services()
+    services = load_services(include_inactive=True)  # full backup — include inactive
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(_CSV_FIELDS)
@@ -308,7 +306,7 @@ async def import_csv(file: UploadFile = File(...)):
     if not required.issubset(set(reader.fieldnames or [])):
         raise HTTPException(status_code=400, detail=f"CSV must have columns: {required}")
 
-    services = load_services()
+    services = load_services(include_inactive=True)  # must include inactive to avoid duplicate inserts
     existing_ids = {s.id for s in services}
 
     created, updated_count, skipped = 0, 0, 0
