@@ -138,10 +138,14 @@ def _this_month_amounts(services) -> tuple[float, float]:
         except ValueError:
             continue
         # Determine if this service's cycle is the current month
-        if not s.paid_current_cycle:
-            in_month = nxt < today.replace(day=1) or (nxt.year == cy and nxt.month == cm)
-        else:
-            # Reverse one cycle to find original due date
+        # Case 1: next_due in this month (paid or not)
+        if nxt.year == cy and nxt.month == cm:
+            in_month = True
+        # Case 2: unpaid and overdue from a prior month
+        elif not s.paid_current_cycle and nxt < today.replace(day=1):
+            in_month = True
+        # Case 3: paid and next_due already advanced — reverse one cycle
+        elif s.paid_current_cycle:
             try:
                 if s.cycle == "weekly":
                     prev = nxt - timedelta(weeks=1)
@@ -168,6 +172,8 @@ def _this_month_amounts(services) -> tuple[float, float]:
                 in_month = prev.year == cy and prev.month == cm
             except ValueError:
                 continue
+        else:
+            in_month = False
         if in_month:
             if s.type == "income":
                 income += s.amount

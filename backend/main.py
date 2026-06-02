@@ -224,9 +224,11 @@ def _monthly_equiv(s: Service) -> float:
 def _due_this_month(s: Service, today: date) -> bool:
     """True if this service's billing cycle falls in the current calendar month.
 
-    For unpaid entries: next_due is in this month (or overdue from this month).
-    For paid entries:   reverse one cycle from next_due to get the original due
-                        date and check if that landed this month.
+    Three cases:
+    1. next_due is in this month (paid or not) — always counts.
+    2. Unpaid and overdue from a prior month — still counts against this month.
+    3. Paid and next_due already advanced past this month — reverse one cycle
+       to recover the original due date and check if it landed this month.
     """
     cy, cm = today.year, today.month
     try:
@@ -234,14 +236,16 @@ def _due_this_month(s: Service, today: date) -> bool:
     except ValueError:
         return False
 
-    if not s.paid_current_cycle:
-        # Unpaid — due this month or already overdue within this month
-        return (nxt.year == cy and nxt.month == cm) or (
-            nxt < today.replace(day=1)  # overdue from a previous month
-            and (nxt.year == cy and nxt.month == cm)  # (already covered above, kept for clarity)
-        ) or nxt < today.replace(day=1)  # overdue: still counts against this month
-    else:
-        # Paid — find the previous due date (before cycle advanced)
+    # Case 1: next_due is still in the current month (paid or unpaid)
+    if nxt.year == cy and nxt.month == cm:
+        return True
+
+    # Case 2: unpaid and overdue from a previous month
+    if not s.paid_current_cycle and nxt < today.replace(day=1):
+        return True
+
+    # Case 3: paid — next_due was already advanced; reverse one cycle
+    if s.paid_current_cycle:
         try:
             if s.cycle == "weekly":
                 prev = nxt - timedelta(weeks=1)
@@ -265,9 +269,11 @@ def _due_this_month(s: Service, today: date) -> bool:
                 prev = nxt.replace(year=nxt.year - 1)
             else:
                 return False
+            return prev.year == cy and prev.month == cm
         except ValueError:
             return False
-        return prev.year == cy and prev.month == cm
+
+    return False
 
 
 @app.get("/api/summary")
