@@ -14,14 +14,12 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --accent: #E8451A; --accent-light: rgba(232,69,26,.15); --accent-dark: #c43a14;
-      --green: #4ade80;  --green-bg: rgba(74,222,128,.12);
-      --amber: #fbbf24;  --amber-bg: rgba(251,191,36,.12);
-      --red: #f87171;    --red-bg: rgba(248,113,113,.12);
-      --blue: #60a5fa;   --blue-bg: rgba(96,165,250,.12);
+      --accent: #E8451A; --accent-light: rgba(232,69,26,.13); --accent-dark: #c43a14;
+      --accent-dim: rgba(232,69,26,.45);
       --neutral-bg: rgba(255,255,255,.06);
+      --neutral-bg2: rgba(255,255,255,.1);
       --bg: #1a1b1e; --bg-card: #25262b; --bg-sidebar: #18191c;
-      --text: #e8e9ed; --text-muted: #6c7086;
+      --text: #e8e9ed; --text-muted: #6c7086; --text-dim: #4e5068;
       --border: rgba(255,255,255,.07);
       --shadow: 0 1px 3px rgba(0,0,0,.4); --shadow-md: 0 4px 16px rgba(0,0,0,.5);
       --radius: 10px; --sidebar-w: 220px; --detail-w: 360px;
@@ -112,11 +110,11 @@
     .bar-value { width: 68px; flex-shrink: 0; font-size: .77rem; font-weight: 600; color: var(--text); }
 
     /* ── Overdue rows ── */
-    .overdue-row { display: flex; justify-content: space-between; align-items: center; padding: .6rem .75rem; background: var(--red-bg); border-radius: 7px; margin-bottom: .4rem; gap: .5rem; }
-    .overdue-name { font-weight: 600; color: var(--red); font-size: .88rem; }
+    .overdue-row { display: flex; justify-content: space-between; align-items: center; padding: .6rem .75rem; background: var(--accent-light); border-radius: 7px; margin-bottom: .4rem; gap: .5rem; border-left: 3px solid var(--accent); }
+    .overdue-name { font-weight: 600; color: var(--accent); font-size: .88rem; }
     .overdue-meta { font-size: .74rem; color: var(--text-muted); }
     .overdue-right { text-align: right; }
-    .overdue-amount { font-weight: 700; color: var(--red); font-size: .88rem; }
+    .overdue-amount { font-weight: 700; color: var(--accent); font-size: .88rem; }
 
     /* ── List toolbar ── */
     .list-toolbar { display: flex; align-items: center; gap: .75rem; margin-bottom: .9rem; flex-wrap: wrap; }
@@ -135,12 +133,12 @@
     .svc-item:hover { background: #2c2d33; }
     .svc-item.selected { background: #2d2e36; }
     .svc-item::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
-    .svc-item.s-paid::before    { background: var(--green); }
-    .svc-item.s-overdue::before { background: var(--red); }
-    .svc-item.s-pending::before { background: var(--amber); }
-    .svc-item.s-upcoming::before { background: var(--blue); }
+    .svc-item.s-paid::before     { background: transparent; }
+    .svc-item.s-overdue::before  { background: var(--accent); }
+    .svc-item.s-pending::before  { background: var(--accent-dim); }
+    .svc-item.s-upcoming::before { background: transparent; }
 
-    .svc-icon { width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: .78rem; font-weight: 800; flex-shrink: 0; overflow: hidden; color: #fff; }
+    .svc-icon { width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: .78rem; font-weight: 700; flex-shrink: 0; overflow: hidden; background: rgba(255,255,255,.07); color: var(--text-muted); }
     .svc-icon img { width: 100%; height: 100%; object-fit: contain; padding: 5px; }
 
     .svc-mid { flex: 1; min-width: 0; }
@@ -149,10 +147,11 @@
 
     .svc-right { text-align: right; flex-shrink: 0; }
     .svc-amount { font-family: var(--font-serif); font-weight: 700; font-size: .92rem; }
-    .svc-amount.income-col { color: var(--green); }
     .svc-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-top: 5px; }
-    .dot-paid { background: var(--green); } .dot-overdue { background: var(--red); }
-    .dot-pending { background: var(--amber); } .dot-upcoming { background: var(--blue); }
+    .dot-paid     { background: rgba(255,255,255,.18); }
+    .dot-overdue  { background: var(--accent); }
+    .dot-pending  { background: var(--accent-dim); }
+    .dot-upcoming { background: rgba(255,255,255,.12); }
 
     /* ── Detail panel ── */
     .panel-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 60; }
@@ -179,8 +178,8 @@
     .detail-big-icon { width: 54px; height: 54px; border-radius: 13px; display: flex; align-items: center; justify-content: center; font-size: 1.05rem; font-weight: 800; flex-shrink: 0; overflow: hidden; color: #fff; }
     .detail-big-icon img { width: 100%; height: 100%; object-fit: contain; padding: 7px; }
     .detail-name { font-family: var(--font-serif); font-size: 1.1rem; font-weight: 700; margin-bottom: .25rem; }
-    .detail-amount { font-family: var(--font-serif); font-size: 1.25rem; font-weight: 700; color: var(--accent); }
-    .detail-amount.income { color: var(--green); }
+    .detail-amount { font-family: var(--font-serif); font-size: 1.25rem; font-weight: 700; color: var(--text); }
+    .detail-big-icon.logo-loaded { background: rgba(255,255,255,.06) !important; }
 
     .detail-body { padding: 1rem 1.4rem; flex: 1; }
     .detail-row { display: flex; justify-content: space-between; align-items: flex-start; padding: .5rem 0; border-bottom: 1px solid var(--border); font-size: .87rem; gap: .75rem; }
@@ -203,20 +202,20 @@
     .btn { display: inline-flex; align-items: center; justify-content: center; gap: .3rem; padding: .5rem 1rem; border-radius: 7px; font-size: .84rem; font-weight: 600; cursor: pointer; border: none; font-family: inherit; transition: background .15s, opacity .15s; }
     .btn:active { opacity: .85; }
     .btn-primary { background: var(--accent); color: #fff; } .btn-primary:hover { background: var(--accent-dark); }
-    .btn-ghost   { background: var(--neutral-bg); color: var(--text); } .btn-ghost:hover { background: rgba(255,255,255,.12); }
-    .btn-success { background: var(--green-bg); color: var(--green); } .btn-success:hover { background: rgba(74,222,128,.22); }
-    .btn-danger  { background: var(--red-bg); color: var(--red); } .btn-danger:hover { background: rgba(248,113,113,.22); }
-    .btn-blue    { background: var(--blue-bg); color: var(--blue); } .btn-blue:hover { background: rgba(96,165,250,.22); }
-    .btn-amber   { background: var(--amber-bg); color: var(--amber); } .btn-amber:hover { background: rgba(251,191,36,.22); }
+    .btn-ghost   { background: var(--neutral-bg); color: var(--text); } .btn-ghost:hover { background: var(--neutral-bg2); }
+    .btn-success { background: var(--neutral-bg); color: var(--text); } .btn-success:hover { background: var(--neutral-bg2); }
+    .btn-danger  { background: var(--accent-light); color: var(--accent); } .btn-danger:hover { background: rgba(232,69,26,.22); }
+    .btn-blue    { background: var(--neutral-bg); color: var(--text); } .btn-blue:hover { background: var(--neutral-bg2); }
+    .btn-amber   { background: var(--neutral-bg); color: var(--text); } .btn-amber:hover { background: var(--neutral-bg2); }
     .btn-sm { padding: .3rem .65rem; font-size: .78rem; }
 
     /* Badges */
     .badge { display: inline-flex; align-items: center; padding: .18rem .5rem; border-radius: 20px; font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
-    .badge-paid    { background: var(--green-bg); color: var(--green); }
-    .badge-pending { background: var(--amber-bg); color: var(--amber); }
-    .badge-overdue { background: var(--red-bg); color: var(--red); }
-    .badge-upcoming{ background: var(--blue-bg); color: var(--blue); }
-    .auto-badge { display: inline-block; background: rgba(99,102,241,.15); color: #a5b4fc; font-size: .66rem; font-weight: 700; padding: .1rem .38rem; border-radius: 4px; text-transform: uppercase; letter-spacing: .04em; }
+    .badge-paid    { background: rgba(255,255,255,.07); color: var(--text-muted); }
+    .badge-pending { background: var(--accent-light); color: var(--accent); }
+    .badge-overdue { background: var(--accent-light); color: var(--accent); }
+    .badge-upcoming{ background: rgba(255,255,255,.07); color: var(--text-muted); }
+    .auto-badge { display: inline-block; background: rgba(255,255,255,.07); color: var(--text-muted); font-size: .66rem; font-weight: 700; padding: .1rem .38rem; border-radius: 4px; text-transform: uppercase; letter-spacing: .04em; }
 
     /* ── Modal ── */
     .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.65); z-index: 200; align-items: center; justify-content: center; padding: 1rem; }
@@ -324,7 +323,7 @@
           </div>
         </div>
         <div class="panel" id="overdue-panel" style="display:none">
-          <div class="panel-title" style="color:var(--red)">🔴 Overdue</div>
+          <div class="panel-title" style="color:var(--accent)">Overdue</div>
           <div id="overdue-list"></div>
         </div>
       </div>
@@ -579,32 +578,25 @@ function initials(name) {
   return w.length === 1 ? name.slice(0, 2).toUpperCase() : (w[0][0] + w[1][0]).toUpperCase();
 }
 
-function catColor(cat) { return CAT_COLORS[cat] || '#6b7280'; }
-
-function hexAlpha(hex, a) {
-  const [r, g, b] = [hex.slice(1,3), hex.slice(3,5), hex.slice(5,7)].map(x => parseInt(x, 16));
-  return `rgba(${r},${g},${b},${a})`;
-}
-
 function logoUrl(name) {
   const d = LOGO_MAP[name.toLowerCase().trim()];
   return d ? `https://logo.clearbit.com/${d}` : null;
 }
 
 function iconHtml(s, size = 40) {
-  const col = catColor(s.category), bg = hexAlpha(col, .2);
   const abbr = initials(s.name), url = logoUrl(s.name);
   const br = Math.round(size * 0.25), fs = size <= 42 ? '.78rem' : '1.05rem';
+  const baseStyle = `width:${size}px;height:${size}px;border-radius:${br}px;font-size:${fs};`;
   if (url) {
-    return `<div class="svc-icon" style="background:${bg};width:${size}px;height:${size}px;border-radius:${br}px;font-size:${fs};color:${col};font-weight:800;" data-fb="${abbr}"><img src="${url}" alt="" loading="lazy" onerror="var p=this.parentNode;this.remove();p.textContent=p.dataset.fb" /></div>`;
+    return `<div class="svc-icon" style="${baseStyle}" data-fb="${abbr}"><img src="${url}" alt="" loading="lazy" onerror="var p=this.parentNode;this.remove();p.textContent=p.dataset.fb" /></div>`;
   }
-  return `<div class="svc-icon" style="background:${bg};color:${col};width:${size}px;height:${size}px;border-radius:${br}px;font-size:${fs};">${abbr}</div>`;
+  return `<div class="svc-icon" style="${baseStyle}">${abbr}</div>`;
 }
 
 function statusBadge(status, isIncome) {
   const maps = isIncome
-    ? { paid:['badge-paid','✅ Received'], pending:['badge-pending','⏳ Expected'], overdue:['badge-overdue','🔴 Not received'], upcoming:['badge-upcoming','🔵 Upcoming'] }
-    : { paid:['badge-paid','✅ Paid'], pending:['badge-pending','⏳ Pending'], overdue:['badge-overdue','🔴 Overdue'], upcoming:['badge-upcoming','🔵 Upcoming'] };
+    ? { paid:['badge-paid','Received'], pending:['badge-pending','Expected soon'], overdue:['badge-overdue','Not received'], upcoming:['badge-upcoming','Upcoming'] }
+    : { paid:['badge-paid','Paid'], pending:['badge-pending','Due soon'], overdue:['badge-overdue','Overdue'], upcoming:['badge-upcoming','Upcoming'] };
   const [cls, lbl] = maps[status] || maps.upcoming;
   return `<span class="badge ${cls}">${lbl}</span>`;
 }
@@ -658,12 +650,13 @@ async function renderDashboard() {
   let sum;
   try { sum = await api('/api/summary'); } catch(e) { return; }
 
-  const nc = sum.net_cashflow, ncCol = nc >= 0 ? 'var(--green)' : 'var(--red)';
+  const nc = sum.net_cashflow;
+  const ncCol = nc < 0 ? 'var(--accent)' : 'var(--text)';
   document.getElementById('stat-row').innerHTML = `
-    <div class="stat-card"><div class="s-label">Monthly Income</div><div class="s-value" style="color:var(--green)">${fmtINR(sum.monthly_income)}</div><div class="s-sub">Estimated this month</div></div>
-    <div class="stat-card"><div class="s-label">Monthly Outgo</div><div class="s-value" style="color:var(--accent)">${fmtINR(sum.monthly_outgo)}</div><div class="s-sub">Bills + subs + expenses</div></div>
+    <div class="stat-card"><div class="s-label">Monthly Income</div><div class="s-value">${fmtINR(sum.monthly_income)}</div><div class="s-sub">Estimated this month</div></div>
+    <div class="stat-card"><div class="s-label">Monthly Outgo</div><div class="s-value">${fmtINR(sum.monthly_outgo)}</div><div class="s-sub">Bills + subs + expenses</div></div>
     <div class="stat-card"><div class="s-label">Net Cashflow</div><div class="s-value" style="color:${ncCol}">${nc>=0?'+':''}${fmtINR(Math.abs(nc))}</div><div class="s-sub">${nc>=0?'Surplus':'Deficit'} this month</div></div>
-    <div class="stat-card"><div class="s-label">Overdue</div><div class="s-value" style="color:${sum.overdue.length?'var(--red)':'var(--text)'}">${sum.overdue.length}</div><div class="s-sub">${sum.overdue.length?'Action needed':'All clear!'}</div></div>
+    <div class="stat-card"><div class="s-label">Overdue</div><div class="s-value" style="color:${sum.overdue.length?'var(--accent)':'var(--text)'}">${sum.overdue.length}</div><div class="s-sub">${sum.overdue.length?'Action needed':'All clear!'}</div></div>
   `;
 
   document.getElementById('upcoming-list').innerHTML = sum.upcoming.length === 0
@@ -694,7 +687,7 @@ async function renderDashboard() {
   document.getElementById('cat-chart').innerHTML = sorted.length === 0
     ? '<p style="color:var(--text-muted);font-size:.83rem">No spending data yet</p>'
     : sorted.map(([cat, val]) =>
-        `<div class="bar-row"><div class="bar-label" title="${cat}">${cat}</div><div class="bar-track"><div class="bar-fill" style="width:${Math.round(val/maxV*100)}%;background:${catColor(cat)}"></div></div><div class="bar-value">${fmtINR(val)}/mo</div></div>`
+        `<div class="bar-row"><div class="bar-label" title="${cat}">${cat}</div><div class="bar-track"><div class="bar-fill" style="width:${Math.round(val/maxV*100)}%;background:var(--accent);opacity:${0.4 + 0.6*(val/maxV)}"></div></div><div class="bar-value">${fmtINR(val)}/mo</div></div>`
       ).join('');
 }
 
@@ -732,7 +725,7 @@ function svcItemHtml(s) {
       <div class="svc-meta">${s.category} · ${dueStr}${s.auto_debit?' · <span class="auto-badge">Auto</span>':''}</div>
     </div>
     <div class="svc-right">
-      <div class="svc-amount${isInc?' income-col':''}">${fmtINR(s.amount)}${cycleShort(s.cycle)}</div>
+      <div class="svc-amount">${fmtINR(s.amount)}${cycleShort(s.cycle)}</div>
       <div style="display:flex;justify-content:flex-end;margin-top:4px"><div class="svc-dot dot-${st}"></div></div>
     </div>
   </div>`;
@@ -764,19 +757,18 @@ function renderDetailContent(s) {
   const st = getStatus(s), isInc = s.type === 'income';
   const isEMI = s.type === 'expense' && s.category === 'EMI';
   const isCC  = s.type === 'expense' && s.category === 'Credit Card';
-  const col = catColor(s.category), bg = hexAlpha(col, .2);
   const abbr = initials(s.name), url = logoUrl(s.name);
   const cs = cycleShort(s.cycle), d = diffDays(s);
   let dueStr;
-  if (st==='paid')       dueStr = `Next: ${s.next_due}`;
+  if (st==='paid')         dueStr = `Next: ${s.next_due}`;
   else if (st==='overdue') dueStr = `${s.next_due} (${Math.abs(d)}d overdue)`;
-  else if (d===0)        dueStr = `${s.next_due} (Today)`;
-  else if (d===1)        dueStr = `${s.next_due} (Tomorrow)`;
-  else                   dueStr = `${s.next_due} (in ${d}d)`;
+  else if (d===0)          dueStr = `${s.next_due} (Today)`;
+  else if (d===1)          dueStr = `${s.next_due} (Tomorrow)`;
+  else                     dueStr = `${s.next_due} (in ${d}d)`;
 
   const bigIcon = url
-    ? `<div class="detail-big-icon" style="background:${bg};color:${col};font-weight:800;" data-fb="${abbr}"><img src="${url}" alt="" loading="lazy" onerror="var p=this.parentNode;this.remove();p.textContent=p.dataset.fb" /></div>`
-    : `<div class="detail-big-icon" style="background:${bg};color:${col};font-size:1.05rem;font-weight:800;">${abbr}</div>`;
+    ? `<div class="detail-big-icon" style="background:rgba(255,255,255,.07);" data-fb="${abbr}"><img src="${url}" alt="" loading="lazy" onerror="var p=this.parentNode;this.remove();p.textContent=p.dataset.fb" /></div>`
+    : `<div class="detail-big-icon" style="background:rgba(255,255,255,.07);color:var(--text-muted);font-size:1.05rem;font-weight:700;">${abbr}</div>`;
 
   let extraRows = '';
   if (isEMI && s.tenure_months) {
@@ -786,13 +778,13 @@ function renderDetailContent(s) {
   }
   if (isCC) {
     if (s.credit_limit)    extraRows += `<div class="detail-row"><span class="d-key">Credit Limit</span><span class="d-val">${fmtINR(s.credit_limit)}</span></div>`;
-    if (s.statement_amount)extraRows += `<div class="detail-row"><span class="d-key">Statement</span><span class="d-val" style="color:var(--amber)">${fmtINR(s.statement_amount)}</span></div>`;
-    extraRows += `<div class="detail-row"><span class="d-key">Outstanding</span><span class="d-val" style="color:var(--red)">${fmtINR(s.outstanding_balance)}</span></div>`;
+    if (s.statement_amount)extraRows += `<div class="detail-row"><span class="d-key">Statement</span><span class="d-val">${fmtINR(s.statement_amount)}</span></div>`;
+    if (s.outstanding_balance > 0) extraRows += `<div class="detail-row"><span class="d-key">Outstanding</span><span class="d-val" style="color:var(--accent)">${fmtINR(s.outstanding_balance)}</span></div>`;
   }
 
   const paidBtn = isInc
-    ? (st==='paid'?'↩ Mark Unreceived':'✓ Mark Received')
-    : (st==='paid'?'↩ Mark Unpaid':'✓ Mark Paid');
+    ? (st==='paid' ? '↩ Mark Unreceived' : '✓ Mark Received')
+    : (st==='paid' ? '↩ Mark Unpaid'     : '✓ Mark Paid');
   const safeName = s.name.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
 
   document.getElementById('detail-content').innerHTML = `
@@ -800,12 +792,12 @@ function renderDetailContent(s) {
       ${bigIcon}
       <div>
         <div class="detail-name">${s.name}</div>
-        <div class="detail-amount${isInc?' income':''}">${fmtINR(s.amount)}${cs}</div>
+        <div class="detail-amount">${fmtINR(s.amount)}${cs}</div>
       </div>
     </div>
     <div class="detail-body">
       <div class="detail-row"><span class="d-key">Status</span><span class="d-val">${statusBadge(st, isInc)}</span></div>
-      <div class="detail-row"><span class="d-key">Category</span><span class="d-val" style="color:${col}">${s.category}</span></div>
+      <div class="detail-row"><span class="d-key">Category</span><span class="d-val">${s.category}</span></div>
       <div class="detail-row"><span class="d-key">Cycle</span><span class="d-val">${s.cycle}</span></div>
       <div class="detail-row"><span class="d-key">${isInc?'Expected':'Due date'}</span><span class="d-val">${dueStr}</span></div>
       ${s.payment_method?`<div class="detail-row"><span class="d-key">Payment</span><span class="d-val">${s.payment_method}${s.auto_debit?' <span class="auto-badge">Auto</span>':''}</span></div>`:''}
@@ -959,7 +951,7 @@ function openPaymentModal(id) {
   document.getElementById('payment-service-id').value = id;
   document.getElementById('payment-info-box').innerHTML = `
     <div class="pi-name">${s.name}</div>
-    <div class="pi-meta">Outstanding: <strong style="color:var(--amber)">${fmtINR(s.outstanding_balance)}</strong>${s.credit_limit?' / '+fmtINR(s.credit_limit)+' limit':''}${s.statement_amount?' · Statement: '+fmtINR(s.statement_amount):''}</div>`;
+    <div class="pi-meta">Outstanding: <strong style="color:var(--accent)">${fmtINR(s.outstanding_balance)}</strong>${s.credit_limit?' / '+fmtINR(s.credit_limit)+' limit':''}${s.statement_amount?' · Statement: '+fmtINR(s.statement_amount):''}</div>`;
   document.getElementById('payment-amount').value = s.statement_amount || '';
   document.getElementById('payment-notes').value  = '';
   document.getElementById('payment-modal-overlay').classList.add('open');
