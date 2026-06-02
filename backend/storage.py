@@ -250,3 +250,110 @@ def auto_mark_paid() -> List[Service]:
 def get_db_path() -> str:
     from database import DB_PATH
     return DB_PATH
+
+
+# ---------------------------------------------------------------------------
+# Paid log (monthly payment history for all service types)
+# ---------------------------------------------------------------------------
+
+def add_paid_log(service: Service) -> None:
+    """Record a payment event when any service is marked as paid/received."""
+    cycle_month = datetime.now().strftime("%Y-%m")
+    record = {
+        "id": str(uuid.uuid4()),
+        "service_id": service.id,
+        "service_name": service.name,
+        "amount": service.amount,
+        "type": service.type,
+        "category": service.category,
+        "cycle_month": cycle_month,
+        "paid_at": datetime.now().isoformat(),
+    }
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO paid_log (id, service_id, service_name, amount, type, category, cycle_month, paid_at) "
+            "VALUES (:id, :service_id, :service_name, :amount, :type, :category, :cycle_month, :paid_at)",
+            record,
+        )
+
+
+def get_history_months() -> list:
+    """Return months that have log records, with income/outgo totals."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT cycle_month,
+                   SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END)  AS total_income,
+                   SUM(CASE WHEN type != 'income' THEN amount ELSE 0 END) AS total_outgo,
+                   COUNT(*) AS count
+            FROM paid_log
+            GROUP BY cycle_month
+            ORDER BY cycle_month DESC
+        """).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_month_log(year_month: str) -> list:
+    """Return all paid_log records for a specific YYYY-MM month."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM paid_log WHERE cycle_month = ? ORDER BY type, paid_at",
+            (year_month,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Investments
+# ---------------------------------------------------------------------------
+
+_INV_UPDATABLE = {"name", "category", "current_value", "invested_amount",
+                  "institution", "notes", "active", "last_updated"}
+
+
+def _row_to_investment(row) -> dict:
+    d = dict(row)
+    d["active"] = bool(d["active"])
+    return d
+
+
+def load_investments() -> list:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM investments WHERE active = 1 ORDER BY category, name"
+        ).fetchall()
+    return [_row_to_investment(r) for r in rows]
+
+
+def get_investment(inv_id: str) -> Optional[dict]:
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM investments WHERE id = ?", (inv_id,)).fetchone()
+    return _row_to_investment(row) if row else None
+
+
+def add_investment(inv: dict) -> dict:
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO investments
+                (id, name, category, current_value, invested_amount,
+                 institution, notes, active, last_updated, created_at)
+            VALUES
+                (:id, :name, :category, :current_value, :invested_amount,
+                 :institution, :notes, :active, :last_updated, :created_at)
+        """, inv)
+    return inv
+
+
+def update_investment(inv_id: str, updates: dict) -> Optional[dict]:
+    clean = {k: v for k, v in updates.items() if k in _INV_UPDATABLE and v is not None}
+    if clean:
+        set_clause = ", ".join(f"{k} = :{k}" for k in clean)
+        clean["_id"] = inv_id
+        with get_db() as conn:
+            conn.execute(f"UPDATE investments SET {set_clause} WHERE id = :_id", clean)
+    return get_investment(inv_id)
+
+
+def delete_investment(inv_id: str) -> bool:
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM investments WHERE id = ?", (inv_id,))
+    return cursor.rowcount > 0

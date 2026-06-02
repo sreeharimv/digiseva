@@ -3,14 +3,17 @@ import io
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from models import Service, ServiceCreate, ServiceUpdate, PaymentRecord
+from models import (
+    Service, ServiceCreate, ServiceUpdate, PaymentRecord,
+    Investment, InvestmentCreate, InvestmentUpdate,
+)
 from storage import (
     load_services,
     save_services,
@@ -21,6 +24,14 @@ from storage import (
     advance_next_due,
     add_payment_history,
     get_payment_history,
+    add_paid_log,
+    get_history_months,
+    get_month_log,
+    load_investments,
+    get_investment,
+    add_investment,
+    update_investment,
+    delete_investment,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -146,6 +157,8 @@ def toggle_paid(service_id: str):
                 extra["active"] = False
 
         updated = update_service(service_id, extra)
+        # Write to paid log (only when marking as paid, not when untoggling)
+        add_paid_log(service)
 
     return updated.model_dump()
 
@@ -372,6 +385,54 @@ async def import_csv(file: UploadFile = File(...)):
 
     save_services(services)
     return {"created": created, "updated": updated_count, "skipped": skipped, "errors": errors}
+
+
+# ---------------------------------------------------------------------------
+# Paid history
+# ---------------------------------------------------------------------------
+
+@app.get("/api/history")
+def history_months():
+    """Return list of months with payment totals."""
+    return get_history_months()
+
+
+@app.get("/api/history/{year_month}")
+def history_month(year_month: str):
+    """Return all paid_log entries for a YYYY-MM month."""
+    return get_month_log(year_month)
+
+
+# ---------------------------------------------------------------------------
+# Investments
+# ---------------------------------------------------------------------------
+
+@app.get("/api/investments")
+def list_investments_endpoint():
+    return load_investments()
+
+
+@app.post("/api/investments", status_code=201)
+def create_investment(data: InvestmentCreate):
+    inv = Investment(**data.model_dump())
+    return add_investment(inv.model_dump())
+
+
+@app.put("/api/investments/{inv_id}")
+def edit_investment(inv_id: str, data: InvestmentUpdate):
+    updates = data.model_dump(exclude_none=True)
+    updates["last_updated"] = datetime.now().isoformat()
+    result = update_investment(inv_id, updates)
+    if not result:
+        raise HTTPException(status_code=404, detail="Investment not found")
+    return result
+
+
+@app.delete("/api/investments/{inv_id}")
+def remove_investment(inv_id: str):
+    if not delete_investment(inv_id):
+        raise HTTPException(status_code=404, detail="Investment not found")
+    return {"ok": True}
 
 
 app.mount("/", StaticFiles(directory="/app/static", html=True), name="static")

@@ -80,6 +80,38 @@ class PaymentRecord(BaseModel):
     notes: str = ""
 
 
+class Investment(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    category: str          # Bank Account / Fixed Deposit / Mutual Fund / Stocks / Gold / PPF / EPF / NPS / Other
+    current_value: float = 0.0
+    invested_amount: float = 0.0
+    institution: str = ""
+    notes: str = ""
+    active: bool = True
+    last_updated: str = Field(default_factory=lambda: datetime.now().isoformat())
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+
+class InvestmentCreate(BaseModel):
+    name: str
+    category: str
+    current_value: float = 0.0
+    invested_amount: float = 0.0
+    institution: str = ""
+    notes: str = ""
+
+
+class InvestmentUpdate(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    current_value: Optional[float] = None
+    invested_amount: Optional[float] = None
+    institution: Optional[str] = None
+    notes: Optional[str] = None
+    active: Optional[bool] = None
+
+
 class SummaryResponse(BaseModel):
     monthly_income: float
     monthly_outgo: float

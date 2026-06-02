@@ -34,6 +34,30 @@ CREATE TABLE IF NOT EXISTS payment_history (
     paid_at     TEXT NOT NULL,
     notes       TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS paid_log (
+    id           TEXT PRIMARY KEY,
+    service_id   TEXT NOT NULL,
+    service_name TEXT NOT NULL,
+    amount       REAL NOT NULL,
+    type         TEXT NOT NULL,
+    category     TEXT NOT NULL,
+    cycle_month  TEXT NOT NULL,
+    paid_at      TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS investments (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    category        TEXT NOT NULL,
+    current_value   REAL NOT NULL DEFAULT 0,
+    invested_amount REAL NOT NULL DEFAULT 0,
+    institution     TEXT NOT NULL DEFAULT '',
+    notes           TEXT NOT NULL DEFAULT '',
+    active          INTEGER NOT NULL DEFAULT 1,
+    last_updated    TEXT NOT NULL,
+    created_at      TEXT NOT NULL
+);
 """
 
 
