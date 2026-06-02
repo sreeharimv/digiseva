@@ -351,6 +351,13 @@
           <div class="panel-title">Portfolio &amp; Bank Balance</div>
           <div class="inv-dash-row" id="inv-dash-stats"></div>
         </div>
+        <div class="panel" id="last-month-panel" style="margin-top:1.1rem;display:none">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.9rem">
+            <div class="panel-title" style="margin-bottom:0" id="last-month-title">Last Month</div>
+            <button class="btn btn-ghost btn-sm" onclick="switchSection('history')">View all →</button>
+          </div>
+          <div id="last-month-stats"></div>
+        </div>
       </div>
 
       <!-- Subscriptions -->
@@ -810,6 +817,26 @@ async function renderDashboard() {
       ` : ''}
     `;
   } else { invPanel.style.display = 'none'; }
+
+  // Last month summary
+  const lmPanel = document.getElementById('last-month-panel');
+  try {
+    const months = await api('/api/history');
+    if (months.length) {
+      lmPanel.style.display = '';
+      const m = months[0];
+      const [y, mo] = m.cycle_month.split('-');
+      const label = new Date(y, mo - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+      const net = m.total_income - m.total_outgo;
+      document.getElementById('last-month-title').textContent = label;
+      document.getElementById('last-month-stats').innerHTML = `
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.9rem">
+          <div class="stat-card"><div class="s-label">Received</div><div class="s-value" style="font-size:1.2rem">${fmtINR(m.total_income)}</div></div>
+          <div class="stat-card"><div class="s-label">Spent</div><div class="s-value" style="font-size:1.2rem">${fmtINR(m.total_outgo)}</div></div>
+          <div class="stat-card"><div class="s-label">Net</div><div class="s-value" style="font-size:1.2rem;color:${net>=0?'var(--accent)':'var(--text-muted)'}">${net>=0?'+':''}${fmtINR(Math.abs(net))}</div></div>
+        </div>`;
+    } else { lmPanel.style.display = 'none'; }
+  } catch(e) { lmPanel.style.display = 'none'; }
 }
 
 // ── Investments ──
