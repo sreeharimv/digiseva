@@ -125,6 +125,57 @@ def _send_chunks(text: str, max_len: int = 4000) -> list[str]:
 # /summary
 # ---------------------------------------------------------------------------
 
+def _this_month_amounts(services) -> tuple[float, float]:
+    """Return (income, outgo) actually due/paid in the current calendar month."""
+    today = date.today()
+    cy, cm = today.year, today.month
+    income = outgo = 0.0
+    for s in services:
+        if not s.active:
+            continue
+        try:
+            nxt = date.fromisoformat(s.next_due)
+        except ValueError:
+            continue
+        # Determine if this service's cycle is the current month
+        if not s.paid_current_cycle:
+            in_month = nxt < today.replace(day=1) or (nxt.year == cy and nxt.month == cm)
+        else:
+            # Reverse one cycle to find original due date
+            try:
+                if s.cycle == "weekly":
+                    prev = nxt - timedelta(weeks=1)
+                elif s.cycle == "monthly":
+                    pm = nxt.month - 1 if nxt.month > 1 else 12
+                    py = nxt.year if nxt.month > 1 else nxt.year - 1
+                    prev = nxt.replace(year=py, month=pm)
+                elif s.cycle == "bi-monthly":
+                    m, y = nxt.month - 2, nxt.year
+                    if m <= 0: m += 12; y -= 1
+                    prev = nxt.replace(year=y, month=m)
+                elif s.cycle == "quarterly":
+                    m, y = nxt.month - 3, nxt.year
+                    if m <= 0: m += 12; y -= 1
+                    prev = nxt.replace(year=y, month=m)
+                elif s.cycle == "half-yearly":
+                    m, y = nxt.month - 6, nxt.year
+                    if m <= 0: m += 12; y -= 1
+                    prev = nxt.replace(year=y, month=m)
+                elif s.cycle == "yearly":
+                    prev = nxt.replace(year=nxt.year - 1)
+                else:
+                    continue
+                in_month = prev.year == cy and prev.month == cm
+            except ValueError:
+                continue
+        if in_month:
+            if s.type == "income":
+                income += s.amount
+            else:
+                outgo += s.amount
+    return income, outgo
+
+
 def _build_summary(services) -> str:
     today = date.today()
     active = [s for s in services if s.active]
@@ -146,17 +197,23 @@ def _build_summary(services) -> str:
         elif st == "overdue": overdue_list.append(s)
         elif st == "pending": pending_list.append(s)
 
-    net = monthly_income - monthly_outgo
-    net_arrow = "▲" if net >= 0 else "▼"
+    tm_income, tm_outgo = _this_month_amounts(active)
+    tm_net   = tm_income - tm_outgo
+    avg_net  = monthly_income - monthly_outgo
+    tm_arrow  = "▲" if tm_net  >= 0 else "▼"
+    avg_arrow = "▲" if avg_net >= 0 else "▼"
 
     type_parts = [f"{by_type[k]} {k}" for k in _TYPE_ORDER if k in by_type]
 
     lines = [
         "📊 *DigiSeva Overview*",
         DIV,
-        f"💚 *Income:*  ₹{monthly_income:,.0f}/mo",
-        f"💸 *Outgo:*   ₹{monthly_outgo:,.0f}/mo",
-        f"📈 *Net:*     {net_arrow} ₹{abs(net):,.0f}/mo",
+        f"*This month:*",
+        f"  💚 In:   ₹{tm_income:,.0f}",
+        f"  💸 Out:  ₹{tm_outgo:,.0f}",
+        f"  📈 Net:  {tm_arrow} ₹{abs(tm_net):,.0f}",
+        f"",
+        f"*Monthly avg:*  ₹{monthly_income:,.0f} in · ₹{monthly_outgo:,.0f} out",
         "",
         f"📦 *Active:* {len(active)}  ({' · '.join(type_parts)})",
         "",

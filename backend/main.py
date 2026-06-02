@@ -209,7 +209,7 @@ def payment_history(service_id: str):
 # ---------------------------------------------------------------------------
 
 def _monthly_equiv(s: Service) -> float:
-    """Convert any billing cycle's amount to a monthly equivalent figure."""
+    """Normalised monthly equivalent — for avg burn-rate display only."""
     return {
         "weekly":      s.amount * 4,
         "monthly":     s.amount,
@@ -221,14 +221,65 @@ def _monthly_equiv(s: Service) -> float:
     }.get(s.cycle, 0.0)
 
 
+def _due_this_month(s: Service, today: date) -> bool:
+    """True if this service's billing cycle falls in the current calendar month.
+
+    For unpaid entries: next_due is in this month (or overdue from this month).
+    For paid entries:   reverse one cycle from next_due to get the original due
+                        date and check if that landed this month.
+    """
+    cy, cm = today.year, today.month
+    try:
+        nxt = date.fromisoformat(s.next_due)
+    except ValueError:
+        return False
+
+    if not s.paid_current_cycle:
+        # Unpaid — due this month or already overdue within this month
+        return (nxt.year == cy and nxt.month == cm) or (
+            nxt < today.replace(day=1)  # overdue from a previous month
+            and (nxt.year == cy and nxt.month == cm)  # (already covered above, kept for clarity)
+        ) or nxt < today.replace(day=1)  # overdue: still counts against this month
+    else:
+        # Paid — find the previous due date (before cycle advanced)
+        try:
+            if s.cycle == "weekly":
+                prev = nxt - timedelta(weeks=1)
+            elif s.cycle == "monthly":
+                pm = nxt.month - 1 if nxt.month > 1 else 12
+                py = nxt.year if nxt.month > 1 else nxt.year - 1
+                prev = nxt.replace(year=py, month=pm)
+            elif s.cycle == "bi-monthly":
+                m, y = nxt.month - 2, nxt.year
+                if m <= 0: m += 12; y -= 1
+                prev = nxt.replace(year=y, month=m)
+            elif s.cycle == "quarterly":
+                m, y = nxt.month - 3, nxt.year
+                if m <= 0: m += 12; y -= 1
+                prev = nxt.replace(year=y, month=m)
+            elif s.cycle == "half-yearly":
+                m, y = nxt.month - 6, nxt.year
+                if m <= 0: m += 12; y -= 1
+                prev = nxt.replace(year=y, month=m)
+            elif s.cycle == "yearly":
+                prev = nxt.replace(year=nxt.year - 1)
+            else:
+                return False
+        except ValueError:
+            return False
+        return prev.year == cy and prev.month == cm
+
+
 @app.get("/api/summary")
 def summary():
     services = load_services()
     today = date.today()
     seven_days = today + timedelta(days=7)
 
-    monthly_income = 0.0
-    monthly_outgo = 0.0
+    avg_income = 0.0      # normalised monthly average
+    avg_outgo = 0.0
+    this_month_income = 0.0   # actual amounts due/paid this calendar month
+    this_month_outgo = 0.0
     upcoming = []
     overdue = []
     paid_count = 0
@@ -236,10 +287,15 @@ def summary():
     for s in services:
         equiv = _monthly_equiv(s)
         if s.type == "income":
-            monthly_income += equiv
+            avg_income += equiv
         else:
-            # subscription, bill, expense all count as outgo
-            monthly_outgo += equiv
+            avg_outgo += equiv
+
+        if _due_this_month(s, today):
+            if s.type == "income":
+                this_month_income += s.amount
+            else:
+                this_month_outgo += s.amount
 
         if s.paid_current_cycle:
             paid_count += 1
@@ -261,14 +317,16 @@ def summary():
     upcoming.sort(key=lambda x: x["next_due"])
     overdue.sort(key=lambda x: x["next_due"])
 
-    monthly_income = round(monthly_income, 2)
-    monthly_outgo = round(monthly_outgo, 2)
-
     return {
-        "monthly_income": monthly_income,
-        "monthly_outgo":  monthly_outgo,
-        "net_cashflow":   round(monthly_income - monthly_outgo, 2),
-        "monthly_total":  monthly_outgo,   # backward-compat alias
+        # This month's actual figures (primary)
+        "this_month_income": round(this_month_income, 2),
+        "this_month_outgo":  round(this_month_outgo, 2),
+        "this_month_net":    round(this_month_income - this_month_outgo, 2),
+        # Normalised monthly averages (secondary — useful for /monthly breakdown)
+        "monthly_income": round(avg_income, 2),
+        "monthly_outgo":  round(avg_outgo, 2),
+        "net_cashflow":   round(avg_income - avg_outgo, 2),
+        "monthly_total":  round(avg_outgo, 2),  # backward-compat alias
         "upcoming":       upcoming,
         "overdue":        overdue,
         "paid_count":     paid_count,

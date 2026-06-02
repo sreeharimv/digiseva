@@ -759,13 +759,29 @@ async function renderDashboard() {
   let sum;
   try { sum = await api('/api/summary'); } catch(e) { return; }
 
-  const nc = sum.net_cashflow;
-  const ncCol = nc < 0 ? 'var(--accent)' : 'var(--text)';
+  const tmNet = sum.this_month_net;
+  const tmNetCol = tmNet < 0 ? 'var(--accent)' : 'var(--text)';
   document.getElementById('stat-row').innerHTML = `
-    <div class="stat-card"><div class="s-label">Monthly Income</div><div class="s-value">${fmtINR(sum.monthly_income)}</div><div class="s-sub">Estimated this month</div></div>
-    <div class="stat-card"><div class="s-label">Monthly Outgo</div><div class="s-value">${fmtINR(sum.monthly_outgo)}</div><div class="s-sub">Bills + subs + expenses</div></div>
-    <div class="stat-card"><div class="s-label">Net Cashflow</div><div class="s-value" style="color:${ncCol}">${nc>=0?'+':''}${fmtINR(Math.abs(nc))}</div><div class="s-sub">${nc>=0?'Surplus':'Deficit'} this month</div></div>
-    <div class="stat-card"><div class="s-label">Overdue</div><div class="s-value" style="color:${sum.overdue.length?'var(--accent)':'var(--text)'}">${sum.overdue.length}</div><div class="s-sub">${sum.overdue.length?'Action needed':'All clear!'}</div></div>
+    <div class="stat-card">
+      <div class="s-label">This Month — In</div>
+      <div class="s-value">${fmtINR(sum.this_month_income)}</div>
+      <div class="s-sub">Income due/received</div>
+    </div>
+    <div class="stat-card">
+      <div class="s-label">This Month — Out</div>
+      <div class="s-value">${fmtINR(sum.this_month_outgo)}</div>
+      <div class="s-sub">Bills &amp; subs due</div>
+    </div>
+    <div class="stat-card">
+      <div class="s-label">This Month — Net</div>
+      <div class="s-value" style="color:${tmNetCol}">${tmNet>=0?'+':''}${fmtINR(Math.abs(tmNet))}</div>
+      <div class="s-sub">Avg/mo: ${fmtINR(sum.monthly_income)} in · ${fmtINR(sum.monthly_outgo)} out</div>
+    </div>
+    <div class="stat-card">
+      <div class="s-label">Overdue</div>
+      <div class="s-value" style="color:${sum.overdue.length?'var(--accent)':'var(--text)'}">${sum.overdue.length}</div>
+      <div class="s-sub">${sum.overdue.length?'Action needed':'All clear!'}</div>
+    </div>
   `;
 
   document.getElementById('upcoming-list').innerHTML = sum.upcoming.length === 0
