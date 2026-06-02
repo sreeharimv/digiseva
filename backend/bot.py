@@ -12,6 +12,9 @@ logger = logging.getLogger(__name__)
 # chat_id -> {index: service_id}
 _pending_paid_session: dict = {}
 
+# chat_id -> {index: {"kind": "investment"|"service", "id": str, "name": str, "current": float}}
+_pending_update_session: dict = {}
+
 DIV = "─" * 22
 
 CAT_EMOJI = {
@@ -475,6 +478,76 @@ def _build_list(services) -> str:
 
 
 # ---------------------------------------------------------------------------
+# /update  (update amount / value of any entry)
+# ---------------------------------------------------------------------------
+
+def _build_update_prompt() -> tuple[str, dict]:
+    """Build a numbered list of investments + income/expense services to update."""
+    from storage import load_investments, load_services
+
+    investments = load_investments()
+    services    = load_services()
+
+    index_map: dict = {}
+    i = 1
+    lines = ["💾 *Update Value*", DIV, ""]
+
+    # ── Bank & Investments ──
+    if investments:
+        lines.append("🏦 *Bank & Investments*")
+        for inv in investments:
+            index_map[str(i)] = {"kind": "investment", "id": inv["id"],
+                                  "name": inv["name"], "current": inv["current_value"]}
+            lines.append(f"  *{i}.* {inv['name']}  —  ₹{inv['current_value']:,.0f}"
+                         + (f"  _{inv['category']}_" if inv.get("category") else ""))
+            i += 1
+        lines.append("")
+
+    # ── Income ──
+    income = [s for s in services if s.type == "income"]
+    if income:
+        lines.append("💚 *Income*")
+        for s in income:
+            index_map[str(i)] = {"kind": "service", "id": s.id,
+                                  "name": s.name, "current": s.amount}
+            lines.append(f"  *{i}.* {s.name}  —  ₹{s.amount:,.0f}{CYCLE_SHORT.get(s.cycle, '')}")
+            i += 1
+        lines.append("")
+
+    # ── Expenses ──
+    expenses = [s for s in services if s.type == "expense"]
+    if expenses:
+        lines.append("💸 *Expenses*")
+        for s in expenses:
+            index_map[str(i)] = {"kind": "service", "id": s.id,
+                                  "name": s.name, "current": s.amount}
+            extra = ""
+            if s.category == "Credit Card" and s.outstanding_balance > 0:
+                extra = f"  _(₹{s.outstanding_balance:,.0f} outstanding)_"
+            lines.append(f"  *{i}.* {s.name}  —  ₹{s.amount:,.0f}{CYCLE_SHORT.get(s.cycle, '')}{extra}")
+            i += 1
+        lines.append("")
+
+    # ── Subscriptions & Bills ──
+    others = [s for s in services if s.type in ("subscription", "bill")]
+    if others:
+        lines.append("📦 *Subscriptions & Bills*")
+        for s in others:
+            index_map[str(i)] = {"kind": "service", "id": s.id,
+                                  "name": s.name, "current": s.amount}
+            lines.append(f"  *{i}.* {s.name}  —  ₹{s.amount:,.0f}{CYCLE_SHORT.get(s.cycle, '')}")
+            i += 1
+        lines.append("")
+
+    if not index_map:
+        return "Nothing to update yet. Add entries from the DigiSeva app.", {}
+
+    lines.append(f"Reply: `<number> <new amount>`")
+    lines.append(f"e.g.  `1 175000`")
+    return "\n".join(lines).strip(), index_map
+
+
+# ---------------------------------------------------------------------------
 # Help text
 # ---------------------------------------------------------------------------
 
@@ -486,6 +559,7 @@ HELP_TEXT = f"""\
 /due         — Items due in next 7 days
 /overdue     — Overdue / unreceived items
 /paid        — Mark an item as paid / received
+/update      — Update any amount or bank balance
 /monthly     — Income & spend by category
 /investments — Portfolio, bank balance & returns
 /history     — Last 3 months of actuals
@@ -531,6 +605,14 @@ async def cmd_investments(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(_build_history(), parse_mode="Markdown")
+
+
+async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = str(update.effective_chat.id)
+    msg, index_map = _build_update_prompt()
+    if index_map:
+        _pending_update_session[chat_id] = index_map
+    await update.message.reply_text(msg, parse_mode="Markdown")
 
 
 async def cmd_paid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -621,14 +703,68 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ---------------------------------------------------------------------------
 
 async def handle_paid_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from storage import get_service, update_service, advance_next_due, add_paid_log
+    from storage import get_service, update_service, advance_next_due, add_paid_log, update_investment
+    from datetime import datetime
 
     chat_id = str(update.effective_chat.id)
+    text    = update.message.text.strip()
+
+    # ── Handle /update reply ──
+    if chat_id in _pending_update_session:
+        index_map = _pending_update_session[chat_id]
+        parts = text.split(None, 1)   # "3 175000"  →  ["3", "175000"]
+
+        if len(parts) != 2:
+            await update.message.reply_text(
+                "❓ Please reply as `<number> <new amount>`\ne.g. `1 175000`\n\nOr /update to restart.",
+                parse_mode="Markdown"
+            )
+            return
+
+        num, val_str = parts
+        if num not in index_map:
+            keys = ", ".join(sorted(index_map.keys(), key=int))
+            await update.message.reply_text(
+                f"❓ Valid numbers are: {keys}\nOr /update to restart."
+            )
+            return
+
+        try:
+            new_val = float(val_str.replace(",", ""))
+        except ValueError:
+            await update.message.reply_text("❓ Amount must be a number, e.g. `175000`", parse_mode="Markdown")
+            return
+
+        item = index_map[num]
+        old_val = item["current"]
+        del _pending_update_session[chat_id]
+
+        if item["kind"] == "investment":
+            update_investment(item["id"], {
+                "current_value": new_val,
+                "last_updated": datetime.now().isoformat(),
+            })
+            diff = new_val - old_val
+            diff_str = f"  ({'+' if diff >= 0 else ''}₹{abs(diff):,.0f})" if old_val > 0 else ""
+            await update.message.reply_text(
+                f"✅ *{item['name']}* updated\n"
+                f"   ₹{old_val:,.0f}  →  ₹{new_val:,.0f}{diff_str}",
+                parse_mode="Markdown"
+            )
+        else:
+            update_service(item["id"], {"amount": new_val})
+            await update.message.reply_text(
+                f"✅ *{item['name']}* amount updated\n"
+                f"   ₹{old_val:,.0f}  →  ₹{new_val:,.0f}",
+                parse_mode="Markdown"
+            )
+        return
+
+    # ── Handle /paid reply ──
     if chat_id not in _pending_paid_session:
         return
 
     index_map = _pending_paid_session[chat_id]
-    text = update.message.text.strip()
 
     if text not in index_map:
         keys = ", ".join(index_map.keys())
@@ -657,7 +793,7 @@ async def handle_paid_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             completion_msg = f"\n   📊 Progress: {new_paid}/{s.tenure_months} paid · {remaining} remaining"
 
     update_service(service_id, extra)
-    add_paid_log(s)          # ← record in monthly history
+    add_paid_log(s)
     del _pending_paid_session[chat_id]
 
     verb = "received" if s.type == "income" else "paid"
@@ -682,6 +818,7 @@ def create_bot_app(token: str) -> Application:
     app.add_handler(CommandHandler("due",         cmd_due))
     app.add_handler(CommandHandler("overdue",     cmd_overdue))
     app.add_handler(CommandHandler("paid",        cmd_paid))
+    app.add_handler(CommandHandler("update",      cmd_update))
     app.add_handler(CommandHandler("monthly",     cmd_monthly))
     app.add_handler(CommandHandler("investments", cmd_investments))
     app.add_handler(CommandHandler("history",     cmd_history))
