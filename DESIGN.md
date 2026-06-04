@@ -637,21 +637,20 @@ until the next phase is confirmed stable.
 
 ---
 
-## Open Decisions
+## Confirmed Decisions
 
-| # | Question | Options | Default |
-|---|----------|---------|---------|
-| 1 | PIN length | 4 digits or 6 digits | **6 digits** |
-| 2 | Session duration | 1h / 2h / 4h | **2 hours** |
-| 3 | Registration | Open or invite-code only | **Invite-code** (add to .env) |
-| 4 | Username format | Display name (e.g. "Sreehari") or email | **Display name** |
-| 5 | Max users | Soft limit? | **No limit** (family scale) |
-| 6 | Forgot PIN | Data lost (like Bitwarden) or admin reset? | **TBD** |
+| # | Question | Decision | Notes |
+|---|----------|----------|-------|
+| 1 | PIN length | **6 digits** | 1,000,000 combinations, standard for banking apps |
+| 2 | Session duration | **2 hours** | Web + bot, re-PIN after expiry |
+| 3 | Registration | **Invite-code only** | `INVITE_CODE` in `.env`, shared with family |
+| 4 | Username format | **Display name** | e.g. "Sreehari", "Anu" — no email needed |
+| 5 | Max users | **No limit** | Family scale, SQLite handles it fine |
+| 6 | Forgot PIN | **Data is lost** | True zero-knowledge — admin cannot recover |
 
-For Q6 — "Forgot PIN" — the safest answer (admin can't recover data) is
-to lose the data. But for a family tool, an admin-assisted reset (admin
-re-encrypts with a new PIN) could be acceptable if implemented carefully.
-This requires a separate design discussion.
+**Q6 implication:** Users should be clearly warned at registration:
+> "Your PIN is the only key to your data. If you forget it, your data cannot
+> be recovered by anyone, including the admin. Write it down somewhere safe."
 
 ---
 
@@ -670,4 +669,4 @@ This requires a separate design discussion.
 
 ---
 
-*This document should be updated as implementation decisions are finalised.*
+*All decisions confirmed June 2026. Document ready for implementation.*
