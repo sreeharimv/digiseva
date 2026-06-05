@@ -294,8 +294,14 @@ def list_services(
 
 @app.post("/api/services", status_code=201)
 def create_service(data: ServiceCreate, current_user: dict = Depends(get_current_user)):
+    uid = current_user["user_id"]
+    dk  = current_user.get("data_key")
     service = Service(**data.model_dump())
-    add_service(service, current_user["user_id"], current_user.get("data_key"))
+    add_service(service, uid, dk)
+    # If the service was created already-paid, write a paid_log entry so it
+    # shows up in the history "Spent" panel (same as toggle_paid does).
+    if service.paid_current_cycle:
+        add_paid_log(service, uid, dk)
     return service.model_dump()
 
 
