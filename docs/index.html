@@ -386,10 +386,17 @@
     <div class="sidebar-footer">
       <button class="btn btn-primary" onclick="openModal()">+ Add Entry</button>
       <div class="sidebar-io">
-        <button class="btn btn-ghost btn-sm" onclick="exportBackup()">↓ Backup</button>
-        <label class="btn btn-ghost btn-sm" style="cursor:pointer;">
-          ↑ Restore
+        <button class="btn btn-ghost btn-sm" onclick="exportBackup()" title="Full backup — services + investments (JSON)">↓ JSON</button>
+        <label class="btn btn-ghost btn-sm" style="cursor:pointer;" title="Restore full backup (JSON)">
+          ↑ JSON
           <input type="file" id="backup-import-input" accept=".json" style="display:none" onchange="importBackup(this)" />
+        </label>
+      </div>
+      <div class="sidebar-io">
+        <button class="btn btn-ghost btn-sm" onclick="exportCSV()" title="Export services as CSV">↓ CSV</button>
+        <label class="btn btn-ghost btn-sm" style="cursor:pointer;" title="Import services from CSV">
+          ↑ CSV
+          <input type="file" id="csv-import-input" accept=".csv" style="display:none" onchange="importCSV(this)" />
         </label>
       </div>
       <button class="btn btn-ghost btn-sm" style="width:100%;gap:.4rem" onclick="openLinkModal()">
