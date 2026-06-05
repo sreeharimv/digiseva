@@ -52,6 +52,7 @@ from auth import (
     record_failed_attempt,
     create_data_key,
     unlock_data_key,
+    rewrap_data_key,
 )
 from storage import migrate_encrypt_user_data
 from fastapi import BackgroundTasks
@@ -219,6 +220,43 @@ def me(current_user: dict = Depends(get_current_user)):
 def auth_status():
     """Returns whether any users exist — frontend uses this to show login vs register."""
     return {"has_users": get_user_count() > 0}
+
+
+class PinChangeRequest(BaseModel):
+    current_pin: str
+    new_pin: str
+
+
+@app.post("/api/auth/change-pin")
+def change_pin(body: PinChangeRequest, current_user: dict = Depends(get_current_user)):
+    """Change PIN: re-encrypts the data_key under the new PIN. Data is not touched."""
+    if not re.fullmatch(r"\d{6}", body.new_pin):
+        raise HTTPException(status_code=400, detail="New PIN must be exactly 6 digits")
+    if body.current_pin == body.new_pin:
+        raise HTTPException(status_code=400, detail="New PIN must differ from current PIN")
+
+    user = get_user_by_id(current_user["user_id"])
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if not verify_pin(body.current_pin, user["pin_hash"]):
+        raise HTTPException(status_code=400, detail="Current PIN is incorrect")
+
+    data_key = unlock_data_key(body.current_pin, user)
+    if not data_key:
+        raise HTTPException(status_code=400, detail="Failed to decrypt key with current PIN")
+
+    enc_dk, nonce_dk, sched_enc, sched_nonce = rewrap_data_key(
+        body.new_pin, current_user["user_id"], data_key
+    )
+    update_user(current_user["user_id"], {
+        "pin_hash":               hash_pin(body.new_pin),
+        "encrypted_data_key":     enc_dk,
+        "key_nonce":              nonce_dk,
+        "scheduler_encrypted_key": sched_enc,
+        "scheduler_key_nonce":    sched_nonce,
+    })
+    return {"message": "PIN changed successfully"}
 
 
 @app.post("/api/auth/link-code")

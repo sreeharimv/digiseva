@@ -47,37 +47,48 @@ def get_alert_message(services) -> str | None:
 
 
 def start_scheduler(bot_app, chat_id: str):
-    from storage import load_services, auto_mark_paid, get_user_by_id
+    from storage import load_services, auto_mark_paid, get_linked_users
 
     async def daily_alert():
         try:
-            from bot import _get_admin_context
-            uid, dk = _get_admin_context()
+            from auth import get_scheduler_data_key
 
-            auto_marked = auto_mark_paid()
+            linked_users = get_linked_users()
+            if not linked_users:
+                return  # no linked Telegram accounts, nothing to do
 
-            services = load_services(uid or '', data_key=dk) if uid else []
-            alert_msg = get_alert_message(services)
+            for user in linked_users:
+                try:
+                    uid      = user["id"]
+                    uchat_id = user["telegram_chat_id"]
+                    dk       = get_scheduler_data_key(user)
+                    if not dk:
+                        continue  # scheduler key not set for this user
 
-            parts = []
+                    auto_marked = auto_mark_paid(user_id=uid)
+                    services    = load_services(uid, data_key=dk)
+                    alert_msg   = get_alert_message(services)
 
-            if auto_marked:
-                lines = ["✅ *Auto-marked as paid:*"]
-                for s in auto_marked:
-                    lines.append(f"  • {s.name} — ₹{s.amount:,.0f} (next due: {s.next_due})")
-                parts.append("\n".join(lines))
+                    parts = []
+                    if auto_marked:
+                        lines = ["✅ *Auto-marked as paid:*"]
+                        for s in auto_marked:
+                            lines.append(f"  • {s.name} — ₹{s.amount:,.0f} (next due: {s.next_due})")
+                        parts.append("\n".join(lines))
+                    if alert_msg:
+                        parts.append(alert_msg)
 
-            if alert_msg:
-                parts.append(alert_msg)
+                    if parts:
+                        await bot_app.bot.send_message(
+                            chat_id=uchat_id,
+                            text="\n\n".join(parts),
+                            parse_mode="Markdown",
+                        )
+                except Exception as e:
+                    logger.error(f"Scheduler alert failed for user {user.get('username')}: {e}")
 
-            if parts:
-                await bot_app.bot.send_message(
-                    chat_id=chat_id,
-                    text="\n\n".join(parts),
-                    parse_mode="Markdown",
-                )
         except Exception as e:
-            logger.error(f"Scheduler alert failed: {e}")
+            logger.error(f"Scheduler daily_alert outer error: {e}")
 
     scheduler.add_job(daily_alert, CronTrigger(hour=9, minute=0, timezone="Asia/Kolkata"))
     scheduler.start()

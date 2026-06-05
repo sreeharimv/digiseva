@@ -270,23 +270,37 @@ def advance_next_due(service: Service) -> str:
 # Scheduler helper
 # ---------------------------------------------------------------------------
 
-def auto_mark_paid() -> List[Service]:
+def get_linked_users() -> list:
+    """Return all users who have linked a Telegram account."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM users WHERE telegram_chat_id IS NOT NULL"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def auto_mark_paid(user_id: Optional[str] = None) -> List[Service]:
     """Mark active auto-debit services as paid when their due date has arrived.
 
-    For EMI entries: increments paid_instalments and deactivates the entry when
-    the full tenure is complete.
-
+    If user_id is given, only that user's services are processed.
     Returns the list of services just auto-marked (used in the morning notification).
     """
     today = date.today().isoformat()
     marked: List[Service] = []
 
     with get_db() as conn:
-        rows = conn.execute("""
-            SELECT * FROM services
-            WHERE active = 1 AND auto_debit = 1 AND paid_current_cycle = 0
-            AND next_due <= ?
-        """, (today,)).fetchall()
+        if user_id:
+            rows = conn.execute("""
+                SELECT * FROM services
+                WHERE active = 1 AND auto_debit = 1 AND paid_current_cycle = 0
+                AND next_due <= ? AND user_id = ?
+            """, (today, user_id)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT * FROM services
+                WHERE active = 1 AND auto_debit = 1 AND paid_current_cycle = 0
+                AND next_due <= ?
+            """, (today,)).fetchall()
 
         for row in rows:
             s = _row_to_service(row)

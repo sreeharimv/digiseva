@@ -351,6 +351,9 @@
     <img src="logo.png" alt="DigiSeva" class="login-logo" />
     <p class="login-title">DigiSeva</p>
     <p class="login-subtitle" id="loginSubtitle">Enter your PIN to unlock</p>
+    <p id="pin-warning" style="display:none;font-size:.73rem;color:#f59e0b;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:7px;padding:.5rem .75rem;margin-bottom:.25rem;line-height:1.45;text-align:left">
+      ⚠️ Your PIN is the <strong>only key</strong> to your data. If you forget it, your data cannot be recovered by anyone — including the admin. Write it down somewhere safe.
+    </p>
 
     <!-- Username field (shown on register, hidden on login after first type) -->
     <input type="text" class="login-name-input" id="loginUsername"
@@ -392,6 +395,10 @@
       <button class="btn btn-ghost btn-sm" style="width:100%;gap:.4rem" onclick="openLinkModal()">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         Link Telegram
+      </button>
+      <button class="btn btn-ghost btn-sm" style="width:100%;gap:.4rem" onclick="openChangePinModal()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Change PIN
       </button>
     </div>
   </aside>
@@ -545,6 +552,37 @@
     <div class="modal-footer" style="justify-content:space-between">
       <button class="btn btn-ghost" onclick="closeLinkModal()">Close</button>
       <button class="btn btn-primary" id="link-gen-btn" onclick="generateLinkCode()">Generate Code</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Change PIN Modal ── -->
+<div class="modal-overlay" id="change-pin-modal-overlay" onclick="closeChangePinModalOnOverlay(event)">
+  <div class="modal" style="max-width:380px">
+    <h2>🔑 Change PIN</h2>
+    <p style="font-size:.83rem;color:var(--text-muted);margin-bottom:1.2rem;line-height:1.5">
+      Your PIN is the <strong>only key</strong> to your data — it cannot be recovered if forgotten.
+    </p>
+    <div class="form-group">
+      <label>Current PIN</label>
+      <input type="password" inputmode="numeric" pattern="\d{6}" maxlength="6"
+             id="cp-current" class="form-input" placeholder="6 digits" autocomplete="current-password"/>
+    </div>
+    <div class="form-group">
+      <label>New PIN</label>
+      <input type="password" inputmode="numeric" pattern="\d{6}" maxlength="6"
+             id="cp-new" class="form-input" placeholder="6 digits" autocomplete="new-password"/>
+    </div>
+    <div class="form-group">
+      <label>Confirm New PIN</label>
+      <input type="password" inputmode="numeric" pattern="\d{6}" maxlength="6"
+             id="cp-confirm" class="form-input" placeholder="6 digits" autocomplete="new-password"/>
+    </div>
+    <div id="cp-error"   style="color:#f87171;font-size:.83rem;margin-bottom:.5rem;display:none"></div>
+    <div id="cp-success" style="color:#4ade80;font-size:.83rem;margin-bottom:.5rem;display:none"></div>
+    <div class="modal-footer" style="justify-content:space-between">
+      <button class="btn btn-ghost" onclick="closeChangePinModal()">Cancel</button>
+      <button class="btn btn-primary" id="cp-submit-btn" onclick="submitChangePin()">Change PIN</button>
     </div>
   </div>
 </div>
@@ -1452,6 +1490,58 @@ async function generateLinkCode() {
   }
 }
 
+// ── Change PIN modal ──────────────────────────────────────────────────────
+
+function openChangePinModal() {
+  ['cp-current','cp-new','cp-confirm'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('cp-error').style.display   = 'none';
+  document.getElementById('cp-success').style.display = 'none';
+  document.getElementById('cp-submit-btn').disabled   = false;
+  document.getElementById('cp-submit-btn').textContent = 'Change PIN';
+  document.getElementById('change-pin-modal-overlay').classList.add('open');
+}
+
+function closeChangePinModal() {
+  document.getElementById('change-pin-modal-overlay').classList.remove('open');
+}
+
+function closeChangePinModalOnOverlay(e) {
+  if (e.target === document.getElementById('change-pin-modal-overlay')) closeChangePinModal();
+}
+
+async function submitChangePin() {
+  const current = document.getElementById('cp-current').value.trim();
+  const newPin  = document.getElementById('cp-new').value.trim();
+  const confirm = document.getElementById('cp-confirm').value.trim();
+  const errEl   = document.getElementById('cp-error');
+  const okEl    = document.getElementById('cp-success');
+  const btn     = document.getElementById('cp-submit-btn');
+  errEl.style.display = 'none';
+  okEl.style.display  = 'none';
+
+  if (!/^\d{6}$/.test(current)) { errEl.textContent = 'Current PIN must be 6 digits'; errEl.style.display='block'; return; }
+  if (!/^\d{6}$/.test(newPin))  { errEl.textContent = 'New PIN must be 6 digits';     errEl.style.display='block'; return; }
+  if (newPin !== confirm)        { errEl.textContent = 'New PINs do not match';         errEl.style.display='block'; return; }
+  if (current === newPin)        { errEl.textContent = 'New PIN must differ from current PIN'; errEl.style.display='block'; return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Changing…';
+  try {
+    await api('/api/auth/change-pin', 'POST', { current_pin: current, new_pin: newPin });
+    okEl.textContent = '✅ PIN changed! Please log in again.';
+    okEl.style.display = 'block';
+    btn.textContent = 'Done';
+    setTimeout(() => { closeChangePinModal(); logout(); }, 1800);
+  } catch(e) {
+    let msg = 'Failed to change PIN';
+    try { msg = JSON.parse(e.message).detail || msg; } catch {}
+    errEl.textContent = msg;
+    errEl.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Change PIN';
+  }
+}
+
 async function submitForm(e) {
   e.preventDefault();
   const id = document.getElementById('form-id').value;
@@ -1677,6 +1767,7 @@ function setRegisterMode(reg) {
   document.getElementById('loginSubtitle').textContent = reg
     ? 'Create your account'
     : 'Enter your PIN to unlock';
+  document.getElementById('pin-warning').style.display = reg ? 'block' : 'none';
   document.getElementById('inviteRow').style.display = reg ? 'flex' : 'none';
   document.getElementById('loginToggle').textContent  = reg
     ? 'Already have an account? Login'

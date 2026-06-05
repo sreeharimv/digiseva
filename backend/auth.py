@@ -92,6 +92,24 @@ def unlock_data_key(pin: str, user: dict) -> Optional[bytes]:
         return None
 
 
+def rewrap_data_key(new_pin: str, user_id: str, data_key: bytes) -> tuple:
+    """Re-encrypt an existing data_key under a new PIN (for PIN change).
+
+    Returns (enc_dk, nonce_dk, sched_enc, sched_nonce) — same shape as
+    the last 4 elements of create_data_key().
+    """
+    from crypto import derive_scheduler_master_key
+    new_master = derive_master_key(new_pin, user_id)
+    enc_dk, nonce_dk = wrap_key(new_master, data_key)
+
+    sched_enc, sched_nonce = ("", "")
+    if SCHEDULER_SECRET:
+        sched_master = derive_scheduler_master_key(SCHEDULER_SECRET)
+        sched_enc, sched_nonce = wrap_key(sched_master, data_key)
+
+    return enc_dk, nonce_dk, sched_enc, sched_nonce
+
+
 def get_scheduler_data_key(user: dict) -> Optional[bytes]:
     """Decrypt user's data_key using the server-side SCHEDULER_SECRET.
 

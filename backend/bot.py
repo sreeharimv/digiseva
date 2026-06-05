@@ -2,6 +2,7 @@ import calendar
 import csv
 import io
 import logging
+import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from telegram import Update
@@ -695,7 +696,9 @@ HELP_TEXT = f"""\
 /help        — Show this message
 {DIV}
 /link <code> — Link this Telegram to your account
-/unlock <PIN>— Unlock bot session (2 hrs)\
+/unlock <PIN>— Unlock bot session (2 hrs)
+/lock        — Lock session immediately
+_(or just send your 6-digit PIN to unlock)_\
 """
 
 
@@ -848,6 +851,19 @@ async def cmd_unlock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
 
 
+async def cmd_lock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manually lock the bot session."""
+    chat_id = str(update.effective_chat.id)
+    if chat_id in _bot_sessions:
+        del _bot_sessions[chat_id]
+        await update.message.reply_text(
+            "🔒 *Locked.* Send `/unlock <PIN>` or just type your 6-digit PIN to unlock again.",
+            parse_mode="Markdown",
+        )
+    else:
+        await update.message.reply_text("Already locked.")
+
+
 async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import load_services, load_investments
     chat_id = str(update.effective_chat.id)
@@ -982,6 +998,38 @@ async def handle_paid_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     chat_id = str(update.effective_chat.id)
     text    = update.message.text.strip()
 
+    # ── PIN-as-message: just type 6 digits to unlock ──
+    if (re.fullmatch(r"\d{6}", text)
+            and chat_id not in _pending_paid_session
+            and chat_id not in _pending_update_session):
+        from storage import get_user_by_chat_id
+        user = get_user_by_chat_id(chat_id)
+        if user and not _get_session(chat_id)[0]:  # linked but no active session
+            try:
+                await update.message.delete()
+            except Exception:
+                pass
+            try:
+                from auth import unlock_data_key
+                data_key = unlock_data_key(text, user)
+            except Exception:
+                data_key = None
+            if data_key:
+                _bot_sessions[chat_id] = {
+                    "user_id":    user["id"],
+                    "data_key":   data_key,
+                    "username":   user["username"],
+                    "expires_at": datetime.utcnow() + SESSION_DURATION,
+                }
+                await update.message.reply_text(
+                    "🔓 *Unlocked!* Session active for 2 hours.\n\n"
+                    "/summary  /list  /due  /paid  /update",
+                    parse_mode="Markdown",
+                )
+            else:
+                await update.message.reply_text("❌ Wrong PIN. Try again.")
+            return
+
     # ── Handle /update reply ──
     if chat_id in _pending_update_session:
         sess      = _pending_update_session[chat_id]
@@ -1094,6 +1142,7 @@ def create_bot_app(token: str) -> Application:
     app.add_handler(CommandHandler("start",       cmd_start))
     app.add_handler(CommandHandler("link",        cmd_link))
     app.add_handler(CommandHandler("unlock",      cmd_unlock))
+    app.add_handler(CommandHandler("lock",        cmd_lock))
     app.add_handler(CommandHandler("summary",     cmd_summary))
     app.add_handler(CommandHandler("list",        cmd_list))
     app.add_handler(CommandHandler("due",         cmd_due))
