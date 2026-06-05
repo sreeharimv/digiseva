@@ -389,6 +389,10 @@
           <input type="file" id="csv-import-input" accept=".csv" style="display:none" onchange="importCSV(this)" />
         </label>
       </div>
+      <button class="btn btn-ghost btn-sm" style="width:100%;gap:.4rem" onclick="openLinkModal()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        Link Telegram
+      </button>
     </div>
   </aside>
 
@@ -515,6 +519,35 @@
 <nav class="bottom-nav">
   <div class="bn-inner" id="bn-inner"></div>
 </nav>
+
+<!-- ── Link Telegram Modal ── -->
+<div class="modal-overlay" id="link-modal-overlay" onclick="closeLinkModalOnOverlay(event)">
+  <div class="modal" style="max-width:420px">
+    <h2>🔗 Link Telegram</h2>
+    <p style="font-size:.87rem;color:var(--text-muted);margin-bottom:1.2rem;line-height:1.5">
+      Generate a one-time code, then send it to your DigiSeva bot on Telegram.
+      The code expires in <strong>10 minutes</strong>.
+    </p>
+    <div id="link-code-area" style="display:none;margin-bottom:1.2rem">
+      <div style="background:var(--bg);border-radius:8px;padding:1rem;text-align:center;margin-bottom:.75rem">
+        <div id="link-code-display" style="font-family:monospace;font-size:1.7rem;font-weight:700;letter-spacing:.2em;color:var(--accent)"></div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:.3rem" id="link-code-timer"></div>
+      </div>
+      <p style="font-size:.85rem;line-height:1.5;color:var(--text-muted)">
+        Open your Telegram bot and send:<br/>
+        <code style="background:var(--bg);padding:.2rem .5rem;border-radius:4px;color:var(--text)">/link <span id="link-code-inline"></span></code>
+      </p>
+      <p style="font-size:.78rem;color:var(--text-dim);margin-top:.5rem">
+        Then unlock with: <code style="background:var(--bg);padding:.15rem .4rem;border-radius:4px">/unlock &lt;your-PIN&gt;</code>
+      </p>
+    </div>
+    <div id="link-error" style="color:#f87171;font-size:.83rem;margin-bottom:.75rem;display:none"></div>
+    <div class="modal-footer" style="justify-content:space-between">
+      <button class="btn btn-ghost" onclick="closeLinkModal()">Close</button>
+      <button class="btn btn-primary" id="link-gen-btn" onclick="generateLinkCode()">Generate Code</button>
+    </div>
+  </div>
+</div>
 
 <!-- ── Add / Edit Modal ── -->
 <div class="modal-overlay" id="modal-overlay" onclick="closeModalOnOverlay(event)">
@@ -1353,6 +1386,71 @@ function openModal(id = null) {
 
 function closeModal() { document.getElementById('modal-overlay').classList.remove('open'); }
 function closeModalOnOverlay(e) { if (e.target === document.getElementById('modal-overlay')) closeModal(); }
+
+// ── Link Telegram modal ────────────────────────────────────────────────────
+
+let _linkTimerInterval = null;
+
+function openLinkModal() {
+  document.getElementById('link-code-area').style.display = 'none';
+  document.getElementById('link-error').style.display = 'none';
+  document.getElementById('link-gen-btn').disabled = false;
+  document.getElementById('link-gen-btn').textContent = 'Generate Code';
+  document.getElementById('link-modal-overlay').classList.add('open');
+}
+
+function closeLinkModal() {
+  document.getElementById('link-modal-overlay').classList.remove('open');
+  if (_linkTimerInterval) { clearInterval(_linkTimerInterval); _linkTimerInterval = null; }
+}
+
+function closeLinkModalOnOverlay(e) {
+  if (e.target === document.getElementById('link-modal-overlay')) closeLinkModal();
+}
+
+async function generateLinkCode() {
+  const btn = document.getElementById('link-gen-btn');
+  const errEl = document.getElementById('link-error');
+  btn.disabled = true;
+  btn.textContent = 'Generating…';
+  errEl.style.display = 'none';
+
+  try {
+    const data = await api('/api/auth/link-code', { method: 'POST' });
+    const code = data.code;
+
+    document.getElementById('link-code-display').textContent = code;
+    document.getElementById('link-code-inline').textContent  = code;
+    document.getElementById('link-code-area').style.display  = 'block';
+    btn.textContent = 'Regenerate';
+    btn.disabled = false;
+
+    // Countdown timer
+    if (_linkTimerInterval) clearInterval(_linkTimerInterval);
+    let remaining = data.expires_in || 600;
+    const timerEl = document.getElementById('link-code-timer');
+    const tick = () => {
+      if (remaining <= 0) {
+        timerEl.textContent = 'Code expired — generate a new one';
+        timerEl.style.color = '#f87171';
+        clearInterval(_linkTimerInterval);
+        return;
+      }
+      const m = String(Math.floor(remaining / 60)).padStart(2,'0');
+      const s = String(remaining % 60).padStart(2,'0');
+      timerEl.textContent = `Expires in ${m}:${s}`;
+      timerEl.style.color = '';
+      remaining--;
+    };
+    tick();
+    _linkTimerInterval = setInterval(tick, 1000);
+  } catch(e) {
+    errEl.textContent = 'Failed to generate code. Are you logged in?';
+    errEl.style.display = 'block';
+    btn.textContent = 'Retry';
+    btn.disabled = false;
+  }
+}
 
 async function submitForm(e) {
   e.preventDefault();

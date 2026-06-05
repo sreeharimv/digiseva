@@ -3,7 +3,7 @@ import csv
 import io
 import logging
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
@@ -16,11 +16,53 @@ _pending_paid_session: dict = {}
 _pending_update_session: dict = {}
 
 # ---------------------------------------------------------------------------
-# Admin context (Phase 3: user_id + data_key via SCHEDULER_SECRET)
+# Phase 4: per-user bot sessions
+# ---------------------------------------------------------------------------
+
+# chat_id -> {"user_id": str, "data_key": bytes, "username": str, "expires_at": datetime}
+_bot_sessions: dict = {}
+
+SESSION_DURATION = timedelta(hours=2)
+
+
+def _get_session(chat_id: str) -> tuple:
+    """Return (user_id, data_key) if session is valid, else (None, None)."""
+    session = _bot_sessions.get(chat_id)
+    if not session:
+        return None, None
+    if datetime.utcnow() > session["expires_at"]:
+        _bot_sessions.pop(chat_id, None)
+        return None, None
+    return session["user_id"], session["data_key"]
+
+
+async def _prompt_unlock(update: Update, chat_id: str) -> None:
+    """Tell user to link or unlock depending on their account state."""
+    from storage import get_user_by_chat_id
+    user = get_user_by_chat_id(chat_id)
+    if not user:
+        await update.message.reply_text(
+            "🔗 *Not linked yet.*\n\n"
+            "To use DigiSeva bot:\n"
+            "1. Open the DigiSeva web app\n"
+            "2. Tap *Link Telegram* (sidebar)\n"
+            "3. Send: `/link <code>`\n\n"
+            "Then unlock with: `/unlock <6-digit-PIN>`",
+            parse_mode="Markdown",
+        )
+    else:
+        await update.message.reply_text(
+            "🔒 *Session locked.*\n\nSend your PIN to unlock:\n`/unlock <6-digit-PIN>`",
+            parse_mode="Markdown",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Admin context — kept for scheduler/daily alert (uses SCHEDULER_SECRET)
 # ---------------------------------------------------------------------------
 
 def _get_admin_context():
-    """Return (user_id, data_key) for the admin user (first registered user)."""
+    """Return (user_id, data_key) for the first registered user via SCHEDULER_SECRET."""
     try:
         from database import get_db
         with get_db() as c:
@@ -207,7 +249,7 @@ def _this_month_amounts(services) -> tuple[float, float]:
     return income, outgo
 
 
-def _build_summary(services) -> str:
+def _build_summary(services, investments=None) -> str:
     today = date.today()
     active = [s for s in services if s.active]
 
@@ -253,16 +295,11 @@ def _build_summary(services) -> str:
         f"🔴 Overdue:         {len(overdue_list)}",
     ]
 
-    # Portfolio snapshot if investments exist
-    try:
-        from storage import load_investments
-        investments = load_investments()
-        if investments:
-            total_val = sum(i["current_value"] for i in investments)
-            bank_bal  = sum(i["current_value"] for i in investments if i["category"] == "Bank Account")
-            lines += ["", f"💰 *Portfolio:* ₹{total_val:,.0f}  (Bank: ₹{bank_bal:,.0f})"]
-    except Exception:
-        pass
+    # Portfolio snapshot if investments provided
+    if investments:
+        total_val = sum(i["current_value"] for i in investments)
+        bank_bal  = sum(i["current_value"] for i in investments if i["category"] == "Bank Account")
+        lines += ["", f"💰 *Portfolio:* ₹{total_val:,.0f}  (Bank: ₹{bank_bal:,.0f})"]
 
     if overdue_list:
         lines += ["", "⚠️ *Overdue items:*"]
@@ -655,7 +692,10 @@ HELP_TEXT = f"""\
 /investments — Portfolio, bank balance & returns
 /history     — Last 3 months of actuals
 /export      — Download data as CSV
-/help        — Show this message\
+/help        — Show this message
+{DIV}
+/link <code> — Link this Telegram to your account
+/unlock <PIN>— Unlock bot session (2 hrs)\
 """
 
 
@@ -663,115 +703,28 @@ HELP_TEXT = f"""\
 # Command handlers
 # ---------------------------------------------------------------------------
 
-async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from storage import load_services
-    uid, dk = _get_admin_context()
-    await update.message.reply_text(_build_summary(load_services(uid or '', data_key=dk)), parse_mode="Markdown")
-
-
-async def cmd_due(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from storage import load_services
-    uid, dk = _get_admin_context()
-    await update.message.reply_text(_build_due(load_services(uid or '', data_key=dk)), parse_mode="Markdown")
-
-
-async def cmd_overdue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from storage import load_services
-    uid, dk = _get_admin_context()
-    await update.message.reply_text(_build_overdue(load_services(uid or '', data_key=dk)), parse_mode="Markdown")
-
-
-async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from storage import load_services
-    uid, dk = _get_admin_context()
-    text = _build_list(load_services(uid or '', data_key=dk))
-    for chunk in _send_chunks(text):
-        await update.message.reply_text(chunk, parse_mode="Markdown")
-
-
-async def cmd_monthly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from storage import load_services
-    uid, dk = _get_admin_context()
-    await update.message.reply_text(_build_monthly(load_services(uid or '', data_key=dk)), parse_mode="Markdown")
-
-
-async def cmd_investments(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    uid, dk = _get_admin_context()
-    await update.message.reply_text(_build_investments(uid, dk), parse_mode="Markdown")
-
-
-async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    uid, _ = _get_admin_context()
-    await update.message.reply_text(_build_history(uid=uid), parse_mode="Markdown")
-
-
-async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = str(update.effective_chat.id)
-    uid, dk = _get_admin_context()
-    msg, index_map = _build_update_prompt(uid, dk)
-    if index_map:
-        _pending_update_session[chat_id] = index_map
-    await update.message.reply_text(msg, parse_mode="Markdown")
-
-
-async def cmd_paid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from storage import load_services
-    chat_id = str(update.effective_chat.id)
-    uid, dk = _get_admin_context()
-    msg, index_map = _build_paid_prompt(load_services(uid or '', data_key=dk))
-    if index_map:
-        _pending_paid_session[chat_id] = index_map
-    await update.message.reply_text(msg, parse_mode="Markdown")
-
-
-async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from storage import load_services
-    try:
-        uid, dk = _get_admin_context()
-        services = load_services(uid or '', data_key=dk)
-        fields = [
-            "id", "name", "type", "category", "amount", "currency",
-            "cycle", "next_due", "payment_method", "auto_debit",
-            "paid_current_cycle", "notes", "active", "created_at",
-            "tenure_months", "paid_instalments",
-            "credit_limit", "outstanding_balance", "statement_amount",
-        ]
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(fields)
-        for s in services:
-            d = s.model_dump()
-            writer.writerow([d[k] for k in fields])
-        output.seek(0)
-        today = date.today().isoformat()
-        await update.message.reply_document(
-            io.BytesIO(output.getvalue().encode("utf-8")),
-            filename=f"digiseva_{today}.csv",
-            caption=f"📦 DigiSeva export — {today} ({len(services)} entries)",
-        )
-    except Exception as e:
-        await update.message.reply_text(f"❌ Export failed: {e}")
-
-
-async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
-
-
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import load_services, load_investments
-    uid, dk = _get_admin_context()
-    services    = load_services(uid or '', data_key=dk)
-    investments = load_investments(uid or '', data_key=dk)
+    chat_id = str(update.effective_chat.id)
+    uid, dk = _get_session(chat_id)
+    name    = update.effective_user.first_name or "there"
+
+    if not uid:
+        await _prompt_unlock(update, chat_id)
+        return
+
+    services    = load_services(uid, data_key=dk)
+    investments = load_investments(uid, data_key=dk)
     active = [s for s in services if s.active]
     monthly_income = sum(_monthly_equiv(s) for s in active if s.type == "income")
     monthly_outgo  = sum(_monthly_equiv(s) for s in active if s.type != "income")
     paid     = sum(1 for s in active if s.paid_current_cycle)
     today    = date.today()
     overdue  = sum(1 for s in active if not s.paid_current_cycle and _try_date(s.next_due) < today)
-    due_soon = sum(1 for s in active if not s.paid_current_cycle and today <= _try_date(s.next_due) <= today + timedelta(days=7))
+    due_soon = sum(1 for s in active if not s.paid_current_cycle
+                   and today <= _try_date(s.next_due) <= today + timedelta(days=7))
     net = monthly_income - monthly_outgo
     net_arrow = "▲" if net >= 0 else "▼"
-    name = update.effective_user.first_name or "there"
 
     inv_line = ""
     if investments:
@@ -800,20 +753,241 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 
+async def cmd_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Link this Telegram chat to a DigiSeva account using a one-time code."""
+    from storage import get_user_by_link_code, update_user
+    chat_id = str(update.effective_chat.id)
+
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: `/link <code>`\n\nGet the code from the DigiSeva web app → *Link Telegram* button.",
+            parse_mode="Markdown",
+        )
+        return
+
+    code = context.args[0].strip().upper()
+    user = get_user_by_link_code(code)
+    if not user:
+        await update.message.reply_text("❌ Invalid code. Generate a new one from the app.")
+        return
+
+    # Check expiry
+    if user.get("link_code_expires"):
+        try:
+            expires = datetime.fromisoformat(user["link_code_expires"])
+            if datetime.utcnow() > expires:
+                await update.message.reply_text("❌ Code expired (10 min limit). Generate a new one.")
+                return
+        except ValueError:
+            pass
+
+    # Link this chat and clear the one-time code
+    update_user(user["id"], {
+        "telegram_chat_id": chat_id,
+        "link_code": None,
+        "link_code_expires": None,
+    })
+
+    tg_name = update.effective_user.first_name or user["username"]
+    await update.message.reply_text(
+        f"✅ *Linked!* Welcome, {tg_name}!\n\n"
+        f"Now unlock with your PIN:\n`/unlock <your-6-digit-PIN>`",
+        parse_mode="Markdown",
+    )
+
+
+async def cmd_unlock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Unlock bot session with PIN. Deletes the PIN message for safety."""
+    from storage import get_user_by_chat_id
+    chat_id = str(update.effective_chat.id)
+
+    # Try to delete the message containing the PIN
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    user = get_user_by_chat_id(chat_id)
+    if not user:
+        await update.message.reply_text(
+            "🔗 Not linked yet.\nGet a code from DigiSeva web app, then send `/link <code>`.",
+            parse_mode="Markdown",
+        )
+        return
+
+    if not context.args or not context.args[0].isdigit() or len(context.args[0]) != 6:
+        await update.message.reply_text(
+            "Usage: `/unlock <6-digit-PIN>`", parse_mode="Markdown"
+        )
+        return
+
+    pin = context.args[0]
+    try:
+        from auth import unlock_data_key
+        data_key = unlock_data_key(pin, user)
+    except Exception:
+        data_key = None
+
+    if not data_key:
+        await update.message.reply_text("❌ Wrong PIN. Try again with `/unlock <PIN>`.", parse_mode="Markdown")
+        return
+
+    _bot_sessions[chat_id] = {
+        "user_id":    user["id"],
+        "data_key":   data_key,
+        "username":   user["username"],
+        "expires_at": datetime.utcnow() + SESSION_DURATION,
+    }
+
+    await update.message.reply_text(
+        f"🔓 *Unlocked!* Session active for 2 hours.\n\n"
+        f"/summary  /list  /due  /overdue\n"
+        f"/paid  /monthly  /investments  /history\n"
+        f"/update  /export",
+        parse_mode="Markdown",
+    )
+
+
+async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from storage import load_services, load_investments
+    chat_id = str(update.effective_chat.id)
+    uid, dk = _get_session(chat_id)
+    if not uid:
+        await _prompt_unlock(update, chat_id); return
+    services    = load_services(uid, data_key=dk)
+    investments = load_investments(uid, data_key=dk)
+    await update.message.reply_text(_build_summary(services, investments), parse_mode="Markdown")
+
+
+async def cmd_due(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from storage import load_services
+    chat_id = str(update.effective_chat.id)
+    uid, dk = _get_session(chat_id)
+    if not uid:
+        await _prompt_unlock(update, chat_id); return
+    await update.message.reply_text(_build_due(load_services(uid, data_key=dk)), parse_mode="Markdown")
+
+
+async def cmd_overdue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from storage import load_services
+    chat_id = str(update.effective_chat.id)
+    uid, dk = _get_session(chat_id)
+    if not uid:
+        await _prompt_unlock(update, chat_id); return
+    await update.message.reply_text(_build_overdue(load_services(uid, data_key=dk)), parse_mode="Markdown")
+
+
+async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from storage import load_services
+    chat_id = str(update.effective_chat.id)
+    uid, dk = _get_session(chat_id)
+    if not uid:
+        await _prompt_unlock(update, chat_id); return
+    text = _build_list(load_services(uid, data_key=dk))
+    for chunk in _send_chunks(text):
+        await update.message.reply_text(chunk, parse_mode="Markdown")
+
+
+async def cmd_monthly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from storage import load_services
+    chat_id = str(update.effective_chat.id)
+    uid, dk = _get_session(chat_id)
+    if not uid:
+        await _prompt_unlock(update, chat_id); return
+    await update.message.reply_text(_build_monthly(load_services(uid, data_key=dk)), parse_mode="Markdown")
+
+
+async def cmd_investments(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = str(update.effective_chat.id)
+    uid, dk = _get_session(chat_id)
+    if not uid:
+        await _prompt_unlock(update, chat_id); return
+    await update.message.reply_text(_build_investments(uid, dk), parse_mode="Markdown")
+
+
+async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = str(update.effective_chat.id)
+    uid, dk = _get_session(chat_id)
+    if not uid:
+        await _prompt_unlock(update, chat_id); return
+    await update.message.reply_text(_build_history(uid=uid), parse_mode="Markdown")
+
+
+async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = str(update.effective_chat.id)
+    uid, dk = _get_session(chat_id)
+    if not uid:
+        await _prompt_unlock(update, chat_id); return
+    msg, index_map = _build_update_prompt(uid, dk)
+    if index_map:
+        _pending_update_session[chat_id] = {"map": index_map, "uid": uid, "dk": dk}
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def cmd_paid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from storage import load_services
+    chat_id = str(update.effective_chat.id)
+    uid, dk = _get_session(chat_id)
+    if not uid:
+        await _prompt_unlock(update, chat_id); return
+    msg, index_map = _build_paid_prompt(load_services(uid, data_key=dk))
+    if index_map:
+        _pending_paid_session[chat_id] = {"map": index_map, "uid": uid, "dk": dk}
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from storage import load_services
+    chat_id = str(update.effective_chat.id)
+    uid, dk = _get_session(chat_id)
+    if not uid:
+        await _prompt_unlock(update, chat_id); return
+    try:
+        services = load_services(uid, data_key=dk)
+        fields = [
+            "id", "name", "type", "category", "amount", "currency",
+            "cycle", "next_due", "payment_method", "auto_debit",
+            "paid_current_cycle", "notes", "active", "created_at",
+            "tenure_months", "paid_instalments",
+            "credit_limit", "outstanding_balance", "statement_amount",
+        ]
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(fields)
+        for s in services:
+            d = s.model_dump()
+            writer.writerow([d[k] for k in fields])
+        output.seek(0)
+        today = date.today().isoformat()
+        await update.message.reply_document(
+            io.BytesIO(output.getvalue().encode("utf-8")),
+            filename=f"digiseva_{today}.csv",
+            caption=f"📦 DigiSeva export — {today} ({len(services)} entries)",
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Export failed: {e}")
+
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
+
+
 # ---------------------------------------------------------------------------
 # Paid reply handler
 # ---------------------------------------------------------------------------
 
 async def handle_paid_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import get_service, update_service, advance_next_due, add_paid_log, update_investment
-    from datetime import datetime
 
     chat_id = str(update.effective_chat.id)
     text    = update.message.text.strip()
 
     # ── Handle /update reply ──
     if chat_id in _pending_update_session:
-        index_map = _pending_update_session[chat_id]
+        sess      = _pending_update_session[chat_id]
+        index_map = sess["map"]
+        uid       = sess["uid"]
+        dk        = sess["dk"]
         parts = text.split(None, 1)   # "3 175000"  →  ["3", "175000"]
 
         if len(parts) != 2:
@@ -844,8 +1018,8 @@ async def handle_paid_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         if item["kind"] == "investment":
             update_investment(item["id"], {
                 "current_value": new_val,
-                "last_updated": datetime.now().isoformat(),
-            })
+                "last_updated": datetime.utcnow().isoformat(),
+            }, uid, data_key=dk)
             diff = new_val - old_val
             diff_str = f"  ({'+' if diff >= 0 else ''}₹{abs(diff):,.0f})" if old_val > 0 else ""
             await update.message.reply_text(
@@ -854,7 +1028,7 @@ async def handle_paid_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 parse_mode="Markdown"
             )
         else:
-            update_service(item["id"], {"amount": new_val})
+            update_service(item["id"], {"amount": new_val}, uid, data_key=dk)
             await update.message.reply_text(
                 f"✅ *{item['name']}* amount updated\n"
                 f"   ₹{old_val:,.0f}  →  ₹{new_val:,.0f}",
@@ -866,7 +1040,10 @@ async def handle_paid_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if chat_id not in _pending_paid_session:
         return
 
-    index_map = _pending_paid_session[chat_id]
+    sess      = _pending_paid_session[chat_id]
+    index_map = sess["map"]
+    uid       = sess["uid"]
+    dk        = sess["dk"]
 
     if text not in index_map:
         keys = ", ".join(index_map.keys())
@@ -874,7 +1051,7 @@ async def handle_paid_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     service_id = index_map[text]
-    s = get_service(service_id)
+    s = get_service(service_id, uid)
     if not s:
         await update.message.reply_text("❌ Service not found.")
         del _pending_paid_session[chat_id]
@@ -894,8 +1071,8 @@ async def handle_paid_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             remaining = s.tenure_months - new_paid
             completion_msg = f"\n   📊 Progress: {new_paid}/{s.tenure_months} paid · {remaining} remaining"
 
-    update_service(service_id, extra)
-    add_paid_log(s)
+    update_service(service_id, extra, uid, data_key=dk)
+    add_paid_log(s, uid, data_key=dk)
     del _pending_paid_session[chat_id]
 
     verb = "received" if s.type == "income" else "paid"
@@ -915,6 +1092,8 @@ async def handle_paid_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 def create_bot_app(token: str) -> Application:
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start",       cmd_start))
+    app.add_handler(CommandHandler("link",        cmd_link))
+    app.add_handler(CommandHandler("unlock",      cmd_unlock))
     app.add_handler(CommandHandler("summary",     cmd_summary))
     app.add_handler(CommandHandler("list",        cmd_list))
     app.add_handler(CommandHandler("due",         cmd_due))

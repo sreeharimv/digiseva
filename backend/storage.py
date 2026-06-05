@@ -501,6 +501,14 @@ def get_user_by_chat_id(chat_id: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
+def get_user_by_link_code(code: str) -> Optional[dict]:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE link_code = ?", (code,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def get_user_count() -> int:
     with get_db() as conn:
         return conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]

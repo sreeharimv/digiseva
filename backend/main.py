@@ -41,6 +41,7 @@ from storage import (
     get_user_by_id,
     get_user_count,
     update_user,
+    get_user_by_link_code,
 )
 from auth import (
     hash_pin,
@@ -218,6 +219,17 @@ def me(current_user: dict = Depends(get_current_user)):
 def auth_status():
     """Returns whether any users exist — frontend uses this to show login vs register."""
     return {"has_users": get_user_count() > 0}
+
+
+@app.post("/api/auth/link-code")
+def generate_link_code(current_user: dict = Depends(get_current_user)):
+    """Generate a short-lived code the user sends to the Telegram bot via /link <code>."""
+    import secrets
+    CHARSET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # no ambiguous O/0/I/1/L
+    code = "".join(secrets.choice(CHARSET) for _ in range(8))
+    expires = (datetime.utcnow() + timedelta(minutes=10)).isoformat()
+    update_user(current_user["user_id"], {"link_code": code, "link_code_expires": expires})
+    return {"code": code, "expires_in": 600}
 
 
 # ---------------------------------------------------------------------------
