@@ -301,6 +301,23 @@
     /* ── Login screen ──────────────────────────────────────────────── */
     .login-overlay { position:fixed; inset:0; background:var(--bg); display:flex; align-items:center; justify-content:center; z-index:2000; }
     .login-overlay.hidden { display:none; }
+    .hidden { display: none !important; }
+
+    .user-badge {
+      display: flex; align-items: center; gap: .35rem;
+      font-size: .8rem; color: var(--text-muted);
+      background: var(--neutral-bg); border-radius: 6px;
+      padding: .28rem .65rem; white-space: nowrap;
+    }
+    .user-badge span { color: var(--text); font-weight: 600; }
+    .lock-btn {
+      display: flex; align-items: center; justify-content: center;
+      background: none; border: 1.5px solid var(--border);
+      border-radius: 7px; width: 32px; height: 32px;
+      color: var(--text-muted); cursor: pointer;
+      transition: border-color .15s, color .15s; font-size: .9rem;
+    }
+    .lock-btn:hover { border-color: var(--accent); color: var(--accent); }
     .login-card { background:var(--bg-card); border:1px solid var(--border); border-radius:20px; padding:2.5rem 2rem; width:min(360px,95vw); display:flex; flex-direction:column; align-items:center; gap:1.25rem; box-shadow:var(--shadow-md); }
     .login-logo { width:64px; height:64px; border-radius:14px; }
     .login-title { font-size:1.4rem; font-weight:700; color:var(--text); margin:0; }
@@ -382,6 +399,8 @@
       <h1 class="page-title" id="page-title">Dashboard</h1>
       <div class="header-right">
         <input type="search" id="search-input" class="search-input" placeholder="Search…" oninput="renderCurrentSection()" style="display:none" />
+        <div class="user-badge hidden" id="user-badge">👤 <span id="badge-username"></span></div>
+        <button class="lock-btn hidden" id="lock-btn" onclick="logout()" title="Lock screen">🔒</button>
         <button class="btn btn-primary btn-sm mobile-add" onclick="openModal()">+ Add</button>
       </div>
     </div>
@@ -1442,14 +1461,34 @@ const USER_KEY  = 'digiseva_user';
 function getToken()    { return localStorage.getItem(TOKEN_KEY); }
 function getUsername() { return localStorage.getItem(USER_KEY) || ''; }
 
+function _updateBadge(username) {
+  const badge = document.getElementById('user-badge');
+  const lock  = document.getElementById('lock-btn');
+  if (username) {
+    document.getElementById('badge-username').textContent = username;
+    badge.classList.remove('hidden');
+    lock.classList.remove('hidden');
+  } else {
+    badge.classList.add('hidden');
+    lock.classList.add('hidden');
+  }
+}
+
 function saveAuth(token, username) {
   localStorage.setItem(TOKEN_KEY, token);
   localStorage.setItem(USER_KEY, username);
+  _updateBadge(username);
 }
 
 function clearAuth() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  _updateBadge(null);
+}
+
+function logout() {
+  clearAuth();
+  showLoginScreen();
 }
 
 // ── Login screen logic ────────────────────────────────────────────────────
@@ -1587,6 +1626,7 @@ async function initAuth() {
       await fetch(API_BASE + '/api/auth/me', {
         headers: { 'Authorization': 'Bearer ' + token }
       }).then(r => { if (!r.ok) throw new Error(); });
+      _updateBadge(getUsername());
       hideLoginScreen();
       return true; // already authed
     } catch {
