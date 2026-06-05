@@ -40,6 +40,7 @@ from storage import (
     get_user_by_username,
     get_user_by_id,
     get_user_count,
+    update_user,
 )
 from auth import (
     hash_pin,
@@ -48,7 +49,11 @@ from auth import (
     get_current_user,
     is_rate_limited,
     record_failed_attempt,
+    create_data_key,
+    unlock_data_key,
 )
+from storage import migrate_encrypt_user_data
+from fastapi import BackgroundTasks
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -155,34 +160,52 @@ def register(data: UserCreate, request: Request):
     if get_user_by_username(username):
         raise HTTPException(status_code=409, detail="Username already taken")
 
+    uid = str(uuid.uuid4())
+    data_key, enc_dk, nonce_dk, sched_enc, sched_nonce = create_data_key(data.pin, uid)
+
     user = {
-        "id":                  str(uuid.uuid4()),
-        "username":            username,
-        "pin_hash":            hash_pin(data.pin),
-        "encrypted_data_key":  "",   # Phase 3
-        "key_nonce":           "",   # Phase 3
-        "created_at":          datetime.now().isoformat(),
+        "id":                      uid,
+        "username":                username,
+        "pin_hash":                hash_pin(data.pin),
+        "encrypted_data_key":      enc_dk,
+        "key_nonce":               nonce_dk,
+        "created_at":              datetime.now().isoformat(),
     }
     create_user(user)
-    token = create_access_token(user["id"], user["username"])
-    return TokenResponse(access_token=token, username=user["username"])
+    if sched_enc:
+        update_user(uid, {"scheduler_encrypted_key": sched_enc,
+                          "scheduler_key_nonce":     sched_nonce})
+
+    token = create_access_token(uid, username, data_key)
+    return TokenResponse(access_token=token, username=username)
 
 
 @app.post("/api/auth/login", response_model=TokenResponse)
-def login(data: UserLogin, request: Request):
+def login(data: UserLogin, request: Request, background_tasks: BackgroundTasks):
     ip = request.client.host
     if is_rate_limited(ip):
-        raise HTTPException(
-            status_code=429,
-            detail="Too many failed attempts. Try again in 15 minutes."
-        )
+        raise HTTPException(status_code=429,
+                            detail="Too many failed attempts. Try again in 15 minutes.")
 
     user = get_user_by_username(data.username.strip())
     if not user or not verify_pin(data.pin, user["pin_hash"]):
         record_failed_attempt(ip)
         raise HTTPException(status_code=401, detail="Invalid username or PIN")
 
-    token = create_access_token(user["id"], user["username"])
+    data_key = unlock_data_key(data.pin, user)
+    if data_key is None and not user.get("encrypted_data_key"):
+        # Old account without a data_key — generate one now
+        dk, enc_dk, nonce_dk, sched_enc, sched_nonce = create_data_key(data.pin, user["id"])
+        data_key = dk
+        update_user(user["id"], {"encrypted_data_key": enc_dk, "key_nonce": nonce_dk,
+                                 "scheduler_encrypted_key": sched_enc,
+                                 "scheduler_key_nonce": sched_nonce})
+
+    if data_key:
+        # Migrate existing plaintext data in the background
+        background_tasks.add_task(migrate_encrypt_user_data, user["id"], data_key)
+
+    token = create_access_token(user["id"], user["username"], data_key)
     return TokenResponse(access_token=token, username=user["username"])
 
 
@@ -209,7 +232,8 @@ def list_services(
     current_user: dict = Depends(get_current_user),
 ):
     uid = current_user["user_id"]
-    services = load_services(uid, include_inactive=include_inactive)
+    dk = current_user.get("data_key")
+    services = load_services(uid, include_inactive=include_inactive, data_key=dk)
     if type:
         services = [s for s in services if s.type == type]
     if category:
@@ -220,13 +244,13 @@ def list_services(
 @app.post("/api/services", status_code=201)
 def create_service(data: ServiceCreate, current_user: dict = Depends(get_current_user)):
     service = Service(**data.model_dump())
-    add_service(service, current_user["user_id"])
+    add_service(service, current_user["user_id"], current_user.get("data_key"))
     return service.model_dump()
 
 
 @app.put("/api/services/{service_id}")
 def edit_service(service_id: str, data: ServiceUpdate, current_user: dict = Depends(get_current_user)):
-    updated = update_service(service_id, data.model_dump(exclude_none=True), current_user["user_id"])
+    updated = update_service(service_id, data.model_dump(exclude_none=True), current_user["user_id"], current_user.get("data_key"))
     if not updated:
         raise HTTPException(status_code=404, detail="Service not found")
     return updated.model_dump()
@@ -246,12 +270,13 @@ def remove_service(service_id: str, current_user: dict = Depends(get_current_use
 @app.post("/api/services/{service_id}/paid")
 def toggle_paid(service_id: str, current_user: dict = Depends(get_current_user)):
     uid = current_user["user_id"]
-    service = get_service(service_id, uid)
+    dk = current_user.get("data_key")
+    service = get_service(service_id, uid, dk)
     if not service:
         raise HTTPException(status_code=404, detail="Service not found")
 
     if service.paid_current_cycle:
-        updated = update_service(service_id, {"paid_current_cycle": False}, uid)
+        updated = update_service(service_id, {"paid_current_cycle": False}, uid, dk)
     else:
         new_due = advance_next_due(service)
         extra: dict = {"paid_current_cycle": True, "next_due": new_due}
@@ -262,8 +287,8 @@ def toggle_paid(service_id: str, current_user: dict = Depends(get_current_user))
             if new_paid >= service.tenure_months:
                 extra["active"] = False
 
-        updated = update_service(service_id, extra, uid)
-        add_paid_log(service, uid)
+        updated = update_service(service_id, extra, uid, dk)
+        add_paid_log(service, uid, dk)
 
     return updated.model_dump()
 
@@ -375,7 +400,7 @@ def _due_this_month(s: Service, today: date) -> bool:
 
 @app.get("/api/summary")
 def summary(current_user: dict = Depends(get_current_user)):
-    services = load_services(current_user["user_id"])
+    services = load_services(current_user["user_id"], data_key=current_user.get("data_key"))
     today = date.today()
     seven_days = today + timedelta(days=7)
 
@@ -452,7 +477,7 @@ _CSV_FIELDS = [
 
 @app.get("/api/export/csv")
 def export_csv(current_user: dict = Depends(get_current_user)):
-    services = load_services(current_user["user_id"], include_inactive=True)
+    services = load_services(current_user["user_id"], include_inactive=True, data_key=current_user.get("data_key"))
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(_CSV_FIELDS)
@@ -481,7 +506,7 @@ async def import_csv(file: UploadFile = File(...), current_user: dict = Depends(
     if not required.issubset(set(reader.fieldnames or [])):
         raise HTTPException(status_code=400, detail=f"CSV must have columns: {required}")
 
-    services = load_services(uid, include_inactive=True)
+    services = load_services(uid, include_inactive=True, data_key=current_user.get("data_key"))
     existing_ids = {s.id for s in services}
 
     created, updated_count, skipped = 0, 0, 0
@@ -545,7 +570,7 @@ async def import_csv(file: UploadFile = File(...), current_user: dict = Depends(
             errors.append(f"Row {i}: {e}")
             skipped += 1
 
-    save_services(services, uid)
+    save_services(services, uid, current_user.get("data_key"))
     return {"created": created, "updated": updated_count, "skipped": skipped, "errors": errors}
 
 
@@ -569,13 +594,13 @@ def history_month(year_month: str, current_user: dict = Depends(get_current_user
 
 @app.get("/api/investments")
 def list_investments_endpoint(current_user: dict = Depends(get_current_user)):
-    return load_investments(current_user["user_id"])
+    return load_investments(current_user["user_id"], current_user.get("data_key"))
 
 
 @app.post("/api/investments", status_code=201)
 def create_investment(data: InvestmentCreate, current_user: dict = Depends(get_current_user)):
     inv = Investment(**data.model_dump())
-    return add_investment(inv.model_dump(), current_user["user_id"])
+    return add_investment(inv.model_dump(), current_user["user_id"], current_user.get("data_key"))
 
 
 @app.put("/api/investments/{inv_id}")
@@ -583,7 +608,7 @@ def edit_investment(inv_id: str, data: InvestmentUpdate, current_user: dict = De
     uid = current_user["user_id"]
     updates = data.model_dump(exclude_none=True)
     updates["last_updated"] = datetime.now().isoformat()
-    result = update_investment(inv_id, updates, uid)
+    result = update_investment(inv_id, updates, uid, current_user.get("data_key"))
     if not result:
         raise HTTPException(status_code=404, detail="Investment not found")
     return result

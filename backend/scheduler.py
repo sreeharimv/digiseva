@@ -47,15 +47,16 @@ def get_alert_message(services) -> str | None:
 
 
 def start_scheduler(bot_app, chat_id: str):
-    from storage import load_services, auto_mark_paid
+    from storage import load_services, auto_mark_paid, get_user_by_id
 
     async def daily_alert():
         try:
-            # Auto-mark paid for services with auto_debit=True whose due date has arrived.
-            # This runs before building the alert so they don't show up as overdue.
+            from bot import _get_admin_context
+            uid, dk = _get_admin_context()
+
             auto_marked = auto_mark_paid()
 
-            services = load_services()
+            services = load_services(uid or '', data_key=dk) if uid else []
             alert_msg = get_alert_message(services)
 
             parts = []

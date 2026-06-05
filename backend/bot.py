@@ -15,6 +15,31 @@ _pending_paid_session: dict = {}
 # chat_id -> {index: {"kind": "investment"|"service", "id": str, "name": str, "current": float}}
 _pending_update_session: dict = {}
 
+# ---------------------------------------------------------------------------
+# Admin context (Phase 3: user_id + data_key via SCHEDULER_SECRET)
+# ---------------------------------------------------------------------------
+
+def _get_admin_context():
+    """Return (user_id, data_key) for the admin user (first registered user)."""
+    try:
+        from database import get_db
+        with get_db() as c:
+            row = c.execute("SELECT id FROM users LIMIT 1").fetchone()
+        if not row:
+            return None, None
+        user_id = row[0]
+        from storage import get_user_by_id
+        user = get_user_by_id(user_id)
+        if not user:
+            return None, None
+        from auth import get_scheduler_data_key
+        dk = get_scheduler_data_key(user)
+        return user_id, dk
+    except Exception:
+        return None, None
+
+
+
 DIV = "─" * 22
 
 CAT_EMOJI = {
@@ -377,9 +402,10 @@ def _build_monthly(services) -> str:
 # /investments
 # ---------------------------------------------------------------------------
 
-def _build_investments() -> str:
+def _build_investments(uid=None, dk=None) -> str:
     from storage import load_investments
-    investments = load_investments()
+    if uid is None: uid, dk = _get_admin_context()
+    investments = load_investments(uid or '', data_key=dk)
 
     if not investments:
         return "💰 No investments tracked yet.\n\nAdd bank accounts, FDs, mutual funds and more from the DigiSeva app."
@@ -420,9 +446,10 @@ def _build_investments() -> str:
 # /history
 # ---------------------------------------------------------------------------
 
-def _build_history(limit: int = 3) -> str:
+def _build_history(limit: int = 3, uid=None) -> str:
     from storage import get_history_months
-    months = get_history_months()
+    if uid is None: uid, _ = _get_admin_context()
+    months = get_history_months(uid or '')
 
     if not months:
         return (
@@ -544,12 +571,13 @@ def _build_list(services) -> str:
 # /update  (update amount / value of any entry)
 # ---------------------------------------------------------------------------
 
-def _build_update_prompt() -> tuple[str, dict]:
+def _build_update_prompt(uid=None, dk=None) -> tuple[str, dict]:
     """Build a numbered list of investments + income/expense services to update."""
     from storage import load_investments, load_services
+    if uid is None: uid, dk = _get_admin_context()
 
-    investments = load_investments()
-    services    = load_services()
+    investments = load_investments(uid or '', data_key=dk)
+    services    = load_services(uid or '', data_key=dk)
 
     index_map: dict = {}
     i = 1
@@ -637,42 +665,50 @@ HELP_TEXT = f"""\
 
 async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import load_services
-    await update.message.reply_text(_build_summary(load_services()), parse_mode="Markdown")
+    uid, dk = _get_admin_context()
+    await update.message.reply_text(_build_summary(load_services(uid or '', data_key=dk)), parse_mode="Markdown")
 
 
 async def cmd_due(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import load_services
-    await update.message.reply_text(_build_due(load_services()), parse_mode="Markdown")
+    uid, dk = _get_admin_context()
+    await update.message.reply_text(_build_due(load_services(uid or '', data_key=dk)), parse_mode="Markdown")
 
 
 async def cmd_overdue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import load_services
-    await update.message.reply_text(_build_overdue(load_services()), parse_mode="Markdown")
+    uid, dk = _get_admin_context()
+    await update.message.reply_text(_build_overdue(load_services(uid or '', data_key=dk)), parse_mode="Markdown")
 
 
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import load_services
-    text = _build_list(load_services())
+    uid, dk = _get_admin_context()
+    text = _build_list(load_services(uid or '', data_key=dk))
     for chunk in _send_chunks(text):
         await update.message.reply_text(chunk, parse_mode="Markdown")
 
 
 async def cmd_monthly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import load_services
-    await update.message.reply_text(_build_monthly(load_services()), parse_mode="Markdown")
+    uid, dk = _get_admin_context()
+    await update.message.reply_text(_build_monthly(load_services(uid or '', data_key=dk)), parse_mode="Markdown")
 
 
 async def cmd_investments(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(_build_investments(), parse_mode="Markdown")
+    uid, dk = _get_admin_context()
+    await update.message.reply_text(_build_investments(uid, dk), parse_mode="Markdown")
 
 
 async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(_build_history(), parse_mode="Markdown")
+    uid, _ = _get_admin_context()
+    await update.message.reply_text(_build_history(uid=uid), parse_mode="Markdown")
 
 
 async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = str(update.effective_chat.id)
-    msg, index_map = _build_update_prompt()
+    uid, dk = _get_admin_context()
+    msg, index_map = _build_update_prompt(uid, dk)
     if index_map:
         _pending_update_session[chat_id] = index_map
     await update.message.reply_text(msg, parse_mode="Markdown")
@@ -681,7 +717,8 @@ async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def cmd_paid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import load_services
     chat_id = str(update.effective_chat.id)
-    msg, index_map = _build_paid_prompt(load_services())
+    uid, dk = _get_admin_context()
+    msg, index_map = _build_paid_prompt(load_services(uid or '', data_key=dk))
     if index_map:
         _pending_paid_session[chat_id] = index_map
     await update.message.reply_text(msg, parse_mode="Markdown")
@@ -690,7 +727,8 @@ async def cmd_paid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import load_services
     try:
-        services = load_services()
+        uid, dk = _get_admin_context()
+        services = load_services(uid or '', data_key=dk)
         fields = [
             "id", "name", "type", "category", "amount", "currency",
             "cycle", "next_due", "payment_method", "auto_debit",
@@ -721,8 +759,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from storage import load_services, load_investments
-    services    = load_services()
-    investments = load_investments()
+    uid, dk = _get_admin_context()
+    services    = load_services(uid or '', data_key=dk)
+    investments = load_investments(uid or '', data_key=dk)
     active = [s for s in services if s.active]
     monthly_income = sum(_monthly_equiv(s) for s in active if s.type == "income")
     monthly_outgo  = sum(_monthly_equiv(s) for s in active if s.type != "income")

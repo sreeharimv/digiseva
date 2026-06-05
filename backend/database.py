@@ -82,6 +82,7 @@ def init_db() -> None:
     with get_db() as conn:
         conn.executescript(_SCHEMA)
         _add_user_id_columns(conn)
+        _add_encryption_columns(conn)
         _migrate_default_user_ids(conn)
 
 
@@ -101,6 +102,24 @@ def _add_user_id_columns(conn) -> None:
         CREATE INDEX IF NOT EXISTS idx_paid_log_user      ON paid_log(user_id);
         CREATE INDEX IF NOT EXISTS idx_payment_hist_user  ON payment_history(user_id);
     """)
+
+
+def _add_encryption_columns(conn) -> None:
+    """Phase 3: add enc_data/enc_nonce to data tables, scheduler key to users."""
+    # Encryption columns for data tables
+    for table in ("services", "investments", "paid_log"):
+        for col in ("enc_data", "enc_nonce"):
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT")
+            except Exception:
+                pass
+
+    # Scheduler key columns on users table
+    for col in ("scheduler_encrypted_key", "scheduler_key_nonce"):
+        try:
+            conn.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
 
 
 def _migrate_default_user_ids(conn) -> None:
