@@ -1,0 +1,33 @@
+name: Sync frontend to GitHub Pages
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'backend/static/**'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync static files to docs/
+        run: |
+          mkdir -p docs
+          cp backend/static/index.html docs/
+          cp backend/static/logo.png docs/ 2>/dev/null || true
+          cp backend/static/favicon.ico docs/ 2>/dev/null || true
+          cp backend/static/apple-touch-icon.png docs/ 2>/dev/null || true
+          cp backend/static/icon-192.png docs/ 2>/dev/null || true
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/
+          git diff --staged --quiet || git commit -m "chore: sync frontend to GitHub Pages"
+          git push
