@@ -1,5 +1,8 @@
 .env
+cricket/.env
+cricket/credentials.json
 __pycache__/
 *.pyc
 *.pyo
 .DS_Store
+data/
