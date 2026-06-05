@@ -1368,7 +1368,25 @@ async function deleteService(id, name) {
   } catch(e) { toast('Error: ' + e.message, true); }
 }
 
-function exportCSV() { window.location.href = '/api/export/csv'; }
+async function exportCSV() {
+  try {
+    const token = getToken();
+    const res = await fetch(API_BASE + '/api/export/csv', {
+      headers: token ? { 'Authorization': 'Bearer ' + token } : {}
+    });
+    if (res.status === 401) { clearAuth(); showLoginScreen(); return; }
+    if (!res.ok) throw new Error('Export failed');
+    const blob = await res.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `digiseva_${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch(e) { toast('Export failed: ' + e.message, true); }
+}
 
 // ── Add / Edit form ──
 function updateFormForType() {
@@ -1633,7 +1651,10 @@ async function importCSV(input) {
   const file = input.files[0]; if (!file) return; input.value = '';
   const fd = new FormData(); fd.append('file', file);
   try {
-    const res = await fetch('/api/import/csv', { method: 'POST', body: fd });
+    const token = getToken();
+    const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
+    const res = await fetch(API_BASE + '/api/import/csv', { method: 'POST', body: fd, headers });
+    if (res.status === 401) { clearAuth(); showLoginScreen(); return; }
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Import failed');
     toast(`✅ Imported: ${data.created} added, ${data.updated} updated${data.skipped?', '+data.skipped+' skipped':''}`);
