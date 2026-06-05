@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 import logging
 import os
 import re
@@ -629,6 +630,90 @@ async def import_csv(file: UploadFile = File(...), current_user: dict = Depends(
 
     save_services(services, uid, current_user.get("data_key"))
     return {"created": created, "updated": updated_count, "skipped": skipped, "errors": errors}
+
+
+# ---------------------------------------------------------------------------
+# JSON full backup / restore  (services + investments)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/export/backup")
+def export_backup(current_user: dict = Depends(get_current_user)):
+    uid = current_user["user_id"]
+    dk  = current_user.get("data_key")
+    services    = load_services(uid, include_inactive=True, data_key=dk)
+    investments = load_investments(uid, data_key=dk)
+    backup = {
+        "version":     1,
+        "exported_at": datetime.now().isoformat(),
+        "services":    [s.model_dump() for s in services],
+        "investments": investments,
+    }
+    content  = json.dumps(backup, indent=2, default=str)
+    filename = f"digiseva_backup_{date.today().isoformat()}.json"
+    return StreamingResponse(
+        iter([content]),
+        media_type="application/json",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@app.post("/api/import/backup")
+async def import_backup(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
+    uid = current_user["user_id"]
+    dk  = current_user.get("data_key")
+
+    raw = await file.read()
+    try:
+        backup = json.loads(raw.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON file")
+
+    # ── Services ──────────────────────────────────────────────────────────
+    svc_created = svc_updated = 0
+    existing_svcs = load_services(uid, include_inactive=True, data_key=dk)
+    existing_ids  = {s.id for s in existing_svcs}
+    to_save = list(existing_svcs)
+
+    for sd in backup.get("services", []):
+        try:
+            svc = Service(**sd)
+            if svc.id in existing_ids:
+                for i, es in enumerate(to_save):
+                    if es.id == svc.id:
+                        to_save[i] = svc; break
+                svc_updated += 1
+            else:
+                to_save.append(svc); existing_ids.add(svc.id); svc_created += 1
+        except Exception:
+            pass
+    save_services(to_save, uid, dk)
+
+    # ── Investments ───────────────────────────────────────────────────────
+    inv_created = inv_updated = 0
+    existing_invs = load_investments(uid, data_key=dk)
+    existing_inv_ids = {inv["id"] for inv in existing_invs}
+
+    for iv in backup.get("investments", []):
+        try:
+            inv_id = iv.get("id") or str(uuid.uuid4())
+            if inv_id in existing_inv_ids:
+                updates = {k: v for k, v in iv.items() if k not in ("id", "user_id")}
+                update_investment(inv_id, updates, uid, dk)
+                inv_updated += 1
+            else:
+                inv = {**iv, "id": inv_id}
+                inv.pop("user_id", None)
+                add_investment(inv, uid, dk)
+                existing_inv_ids.add(inv_id); inv_created += 1
+        except Exception:
+            pass
+
+    return {
+        "services_created":    svc_created,
+        "services_updated":    svc_updated,
+        "investments_created": inv_created,
+        "investments_updated": inv_updated,
+    }
 
 
 # ---------------------------------------------------------------------------

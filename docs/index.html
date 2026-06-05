@@ -386,10 +386,10 @@
     <div class="sidebar-footer">
       <button class="btn btn-primary" onclick="openModal()">+ Add Entry</button>
       <div class="sidebar-io">
-        <button class="btn btn-ghost btn-sm" onclick="exportCSV()">↓ Export</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportBackup()">↓ Backup</button>
         <label class="btn btn-ghost btn-sm" style="cursor:pointer;">
-          ↑ Import
-          <input type="file" id="csv-import-input" accept=".csv" style="display:none" onchange="importCSV(this)" />
+          ↑ Restore
+          <input type="file" id="backup-import-input" accept=".json" style="display:none" onchange="importBackup(this)" />
         </label>
       </div>
       <button class="btn btn-ghost btn-sm" style="width:100%;gap:.4rem" onclick="openLinkModal()">
@@ -1368,22 +1368,56 @@ async function deleteService(id, name) {
   } catch(e) { toast('Error: ' + e.message, true); }
 }
 
-async function exportCSV() {
+// ── Full backup / restore (JSON — services + investments) ──
+async function _authFetch(path) {
+  const token = getToken();
+  const res = await fetch(API_BASE + path, {
+    headers: token ? { 'Authorization': 'Bearer ' + token } : {}
+  });
+  if (res.status === 401) { clearAuth(); showLoginScreen(); throw new Error('Session expired'); }
+  return res;
+}
+
+async function exportBackup() {
+  try {
+    const res = await _authFetch('/api/export/backup');
+    if (!res.ok) throw new Error('Backup failed');
+    const blob = await res.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `digiseva_backup_${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast('✅ Backup downloaded');
+  } catch(e) { toast('Backup failed: ' + e.message, true); }
+}
+
+async function importBackup(input) {
+  const file = input.files[0]; if (!file) return; input.value = '';
+  const fd = new FormData(); fd.append('file', file);
   try {
     const token = getToken();
-    const res = await fetch(API_BASE + '/api/export/csv', {
-      headers: token ? { 'Authorization': 'Bearer ' + token } : {}
-    });
+    const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
+    const res = await fetch(API_BASE + '/api/import/backup', { method: 'POST', body: fd, headers });
     if (res.status === 401) { clearAuth(); showLoginScreen(); return; }
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Restore failed');
+    toast(`✅ Restored: ${data.services_created} new + ${data.services_updated} updated services, ${data.investments_created} new + ${data.investments_updated} updated investments`);
+    await loadAll();
+  } catch(e) { toast('Restore error: ' + e.message, true); }
+}
+
+async function exportCSV() {
+  try {
+    const res = await _authFetch('/api/export/csv');
     if (!res.ok) throw new Error('Export failed');
     const blob = await res.blob();
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
     a.href     = url;
     a.download = `digiseva_${new Date().toISOString().split('T')[0]}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
   } catch(e) { toast('Export failed: ' + e.message, true); }
 }
