@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request, UploadFile, File, Depends
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
