@@ -386,16 +386,9 @@
     <div class="sidebar-footer">
       <button class="btn btn-primary" onclick="openModal()">+ Add Entry</button>
       <div class="sidebar-io">
-        <button class="btn btn-ghost btn-sm" onclick="exportBackup()" title="Full backup — services + investments (JSON)">↓ JSON</button>
-        <label class="btn btn-ghost btn-sm" style="cursor:pointer;" title="Restore full backup (JSON)">
-          ↑ JSON
-          <input type="file" id="backup-import-input" accept=".json" style="display:none" onchange="importBackup(this)" />
-        </label>
-      </div>
-      <div class="sidebar-io">
-        <button class="btn btn-ghost btn-sm" onclick="exportCSV()" title="Export services as CSV">↓ CSV</button>
-        <label class="btn btn-ghost btn-sm" style="cursor:pointer;" title="Import services from CSV">
-          ↑ CSV
+        <button class="btn btn-ghost btn-sm" onclick="exportCSV()" title="Export all data as CSV">↓ Export</button>
+        <label class="btn btn-ghost btn-sm" style="cursor:pointer;" title="Import from CSV">
+          ↑ Import
           <input type="file" id="csv-import-input" accept=".csv" style="display:none" onchange="importCSV(this)" />
         </label>
       </div>
@@ -1698,7 +1691,10 @@ async function importCSV(input) {
     if (res.status === 401) { clearAuth(); showLoginScreen(); return; }
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Import failed');
-    toast(`✅ Imported: ${data.created} added, ${data.updated} updated${data.skipped?', '+data.skipped+' skipped':''}`);
+    const sc = data.services_created || 0, su = data.services_updated || 0;
+    const ic = data.investments_created || 0, iu = data.investments_updated || 0;
+    const sk = data.skipped || 0;
+    toast(`✅ Services: ${sc} new, ${su} updated · Investments: ${ic} new, ${iu} updated${sk ? ' · '+sk+' skipped' : ''}`);
     await loadAll();
   } catch(e) { toast('Import error: ' + e.message, true); }
 }

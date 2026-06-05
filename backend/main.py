@@ -532,104 +532,176 @@ _CSV_FIELDS = [
     "credit_limit", "outstanding_balance", "statement_amount",
 ]
 
+_CSV_INV_FIELDS = [
+    "id", "name", "category", "current_value", "invested_amount",
+    "institution", "notes", "active", "last_updated", "created_at",
+]
+
 
 @app.get("/api/export/csv")
 def export_csv(current_user: dict = Depends(get_current_user)):
-    services = load_services(current_user["user_id"], include_inactive=True, data_key=current_user.get("data_key"))
+    uid = current_user["user_id"]
+    dk  = current_user.get("data_key")
+    services    = load_services(uid, include_inactive=True, data_key=dk)
+    investments = load_investments(uid, data_key=dk)
+
     output = io.StringIO()
     writer = csv.writer(output)
+
+    # ── Services section ──
+    writer.writerow(["## SERVICES"])
     writer.writerow(_CSV_FIELDS)
     for s in services:
         d = s.model_dump()
         writer.writerow([d[k] for k in _CSV_FIELDS])
+
+    # ── Investments section ──
+    writer.writerow([])
+    writer.writerow(["## INVESTMENTS"])
+    writer.writerow(_CSV_INV_FIELDS)
+    for inv in investments:
+        writer.writerow([inv.get(k, "") for k in _CSV_INV_FIELDS])
+
     output.seek(0)
+    filename = f"digiseva_{date.today().isoformat()}.csv"
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=digiseva.csv"},
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
 
 @app.post("/api/import/csv")
 async def import_csv(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
     uid = current_user["user_id"]
+    dk  = current_user.get("data_key")
     content = await file.read()
     try:
         text = content.decode("utf-8-sig")  # handle Excel BOM
     except UnicodeDecodeError:
         text = content.decode("latin-1")
 
-    reader = csv.DictReader(io.StringIO(text))
-    required = {"name", "type", "category", "amount", "cycle", "next_due"}
-    if not required.issubset(set(reader.fieldnames or [])):
-        raise HTTPException(status_code=400, detail=f"CSV must have columns: {required}")
+    # Split into services and investments sections (## SERVICES / ## INVESTMENTS)
+    svc_lines, inv_lines = [], []
+    current_section = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == "## SERVICES":
+            current_section = "services"
+        elif stripped == "## INVESTMENTS":
+            current_section = "investments"
+        elif stripped == "":
+            pass  # blank separator between sections
+        elif current_section == "services":
+            svc_lines.append(line)
+        elif current_section == "investments":
+            inv_lines.append(line)
+        else:
+            # Legacy CSV with no section headers — treat whole file as services
+            svc_lines.append(line)
+            current_section = "services"
 
-    services = load_services(uid, include_inactive=True, data_key=current_user.get("data_key"))
-    existing_ids = {s.id for s in services}
-
-    created, updated_count, skipped = 0, 0, 0
+    svc_created = svc_updated = svc_skipped = 0
+    inv_created = inv_updated = inv_skipped = 0
     errors = []
 
-    for i, row in enumerate(reader, start=2):
-        try:
-            row_id = row.get("id", "").strip()
+    # ── Services ──────────────────────────────────────────────────────────
+    if svc_lines:
+        reader = csv.DictReader(io.StringIO("\n".join(svc_lines)))
+        required = {"name", "type", "category", "amount", "cycle", "next_due"}
+        if required.issubset(set(reader.fieldnames or [])):
+            services = load_services(uid, include_inactive=True, data_key=dk)
+            existing_ids = {s.id for s in services}
 
-            def _bool(key, default="false"):
-                return str(row.get(key, default)).lower() in ("true", "1", "yes")
+            for i, row in enumerate(reader, start=2):
+                try:
+                    row_id = row.get("id", "").strip()
 
-            def _opt_int(key):
-                v = row.get(key, "").strip()
-                return int(v) if v else None
+                    def _bool(key, default="false"):
+                        return str(row.get(key, default)).lower() in ("true", "1", "yes")
+                    def _opt_int(key):
+                        v = row.get(key, "").strip(); return int(v) if v else None
+                    def _opt_float(key):
+                        v = row.get(key, "").strip(); return float(v) if v else None
 
-            def _opt_float(key):
-                v = row.get(key, "").strip()
-                return float(v) if v else None
+                    payload = {
+                        "name":                row["name"].strip(),
+                        "type":                row["type"].strip(),
+                        "category":            row["category"].strip(),
+                        "amount":              float(row["amount"]),
+                        "currency":            row.get("currency", "INR").strip() or "INR",
+                        "cycle":               row["cycle"].strip(),
+                        "next_due":            row["next_due"].strip(),
+                        "payment_method":      row.get("payment_method", "").strip(),
+                        "auto_debit":          _bool("auto_debit"),
+                        "paid_current_cycle":  _bool("paid_current_cycle"),
+                        "notes":               row.get("notes", "").strip(),
+                        "active":              str(row.get("active", "true")).lower() not in ("false", "0", "no"),
+                        "tenure_months":       _opt_int("tenure_months"),
+                        "paid_instalments":    int(row.get("paid_instalments", 0) or 0),
+                        "credit_limit":        _opt_float("credit_limit"),
+                        "outstanding_balance": float(row.get("outstanding_balance", 0) or 0),
+                        "statement_amount":    float(row.get("statement_amount", 0) or 0),
+                    }
+                    if row_id and row_id in existing_ids:
+                        for j, s in enumerate(services):
+                            if s.id == row_id:
+                                updated_data = s.model_dump(); updated_data.update(payload)
+                                services[j] = Service(**updated_data); break
+                        svc_updated += 1
+                    else:
+                        created_at = row.get("created_at", "").strip()
+                        new_svc = Service(**payload)
+                        if created_at: new_svc.created_at = created_at
+                        if row_id: new_svc.id = row_id
+                        services.append(new_svc); existing_ids.add(new_svc.id); svc_created += 1
+                except Exception as e:
+                    errors.append(f"Service row {i}: {e}"); svc_skipped += 1
 
-            payload = {
-                "name":                row["name"].strip(),
-                "type":                row["type"].strip(),
-                "category":            row["category"].strip(),
-                "amount":              float(row["amount"]),
-                "currency":            row.get("currency", "INR").strip() or "INR",
-                "cycle":               row["cycle"].strip(),
-                "next_due":            row["next_due"].strip(),
-                "payment_method":      row.get("payment_method", "").strip(),
-                "auto_debit":          _bool("auto_debit"),
-                "paid_current_cycle":  _bool("paid_current_cycle"),
-                "notes":               row.get("notes", "").strip(),
-                "active":              str(row.get("active", "true")).lower() not in ("false", "0", "no"),
-                "tenure_months":       _opt_int("tenure_months"),
-                "paid_instalments":    int(row.get("paid_instalments", 0) or 0),
-                "credit_limit":        _opt_float("credit_limit"),
-                "outstanding_balance": float(row.get("outstanding_balance", 0) or 0),
-                "statement_amount":    float(row.get("statement_amount", 0) or 0),
-            }
+            save_services(services, uid, dk)
 
-            if row_id and row_id in existing_ids:
-                for j, s in enumerate(services):
-                    if s.id == row_id:
-                        updated_data = s.model_dump()
-                        updated_data.update(payload)
-                        services[j] = Service(**updated_data)
-                        break
-                updated_count += 1
-            else:
-                created_at = row.get("created_at", "").strip()
-                new_service = Service(**payload)
-                if created_at:
-                    new_service.created_at = created_at
-                if row_id:
-                    new_service.id = row_id
-                services.append(new_service)
-                existing_ids.add(new_service.id)
-                created += 1
+    # ── Investments ───────────────────────────────────────────────────────
+    if inv_lines:
+        reader = csv.DictReader(io.StringIO("\n".join(inv_lines)))
+        if {"name", "category"}.issubset(set(reader.fieldnames or [])):
+            existing_invs = load_investments(uid, data_key=dk)
+            existing_inv_ids = {inv["id"] for inv in existing_invs}
 
-        except Exception as e:
-            errors.append(f"Row {i}: {e}")
-            skipped += 1
+            for i, row in enumerate(reader, start=2):
+                try:
+                    inv_id = row.get("id", "").strip()
+                    payload = {
+                        "name":             row["name"].strip(),
+                        "category":         row["category"].strip(),
+                        "current_value":    float(row.get("current_value", 0) or 0),
+                        "invested_amount":  float(row.get("invested_amount", 0) or 0),
+                        "institution":      row.get("institution", "").strip(),
+                        "notes":            row.get("notes", "").strip(),
+                        "active":           str(row.get("active", "true")).lower() not in ("false", "0", "no"),
+                    }
+                    if inv_id and inv_id in existing_inv_ids:
+                        payload["last_updated"] = datetime.now().isoformat()
+                        update_investment(inv_id, payload, uid, dk)
+                        inv_updated += 1
+                    else:
+                        inv = {**payload, "id": inv_id or str(uuid.uuid4())}
+                        created_at = row.get("created_at", "").strip()
+                        if created_at: inv["created_at"] = created_at
+                        last_updated = row.get("last_updated", "").strip()
+                        if last_updated: inv["last_updated"] = last_updated
+                        add_investment(inv, uid, dk)
+                        existing_inv_ids.add(inv["id"]); inv_created += 1
+                except Exception as e:
+                    errors.append(f"Investment row {i}: {e}"); inv_skipped += 1
 
-    save_services(services, uid, current_user.get("data_key"))
-    return {"created": created, "updated": updated_count, "skipped": skipped, "errors": errors}
+    return {
+        "services_created":    svc_created,
+        "services_updated":    svc_updated,
+        "investments_created": inv_created,
+        "investments_updated": inv_updated,
+        "skipped":             svc_skipped + inv_skipped,
+        "errors":              errors,
+    }
 
 
 # ---------------------------------------------------------------------------
