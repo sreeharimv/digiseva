@@ -1416,7 +1416,7 @@ async function generateLinkCode() {
   errEl.style.display = 'none';
 
   try {
-    const data = await api('/api/auth/link-code', { method: 'POST' });
+    const data = await api('/api/auth/link-code', 'POST');
     const code = data.code;
 
     document.getElementById('link-code-display').textContent = code;
