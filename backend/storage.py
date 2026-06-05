@@ -357,3 +357,60 @@ def delete_investment(inv_id: str) -> bool:
     with get_db() as conn:
         cursor = conn.execute("DELETE FROM investments WHERE id = ?", (inv_id,))
     return cursor.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Users
+# ---------------------------------------------------------------------------
+
+def create_user(user: dict) -> dict:
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO users
+                (id, username, pin_hash, encrypted_data_key, key_nonce, created_at)
+            VALUES
+                (:id, :username, :pin_hash, :encrypted_data_key, :key_nonce, :created_at)
+        """, user)
+    return user
+
+
+def get_user_by_username(username: str) -> Optional[dict]:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE username = ?", (username,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_user_by_id(user_id: str) -> Optional[dict]:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_user_by_chat_id(chat_id: str) -> Optional[dict]:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE telegram_chat_id = ?", (str(chat_id),)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_user_count() -> int:
+    with get_db() as conn:
+        return conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+
+
+def update_user(user_id: str, updates: dict) -> Optional[dict]:
+    _UPDATABLE_USER = {"pin_hash", "encrypted_data_key", "key_nonce",
+                       "telegram_chat_id", "link_code", "link_code_expires"}
+    clean = {k: v for k, v in updates.items() if k in _UPDATABLE_USER}
+    if not clean:
+        return get_user_by_id(user_id)
+    set_clause = ", ".join(f"{k} = :{k}" for k in clean)
+    clean["_id"] = user_id
+    with get_db() as conn:
+        conn.execute(f"UPDATE users SET {set_clause} WHERE id = :_id", clean)
+    return get_user_by_id(user_id)

@@ -58,6 +58,21 @@ CREATE TABLE IF NOT EXISTS investments (
     last_updated    TEXT NOT NULL,
     created_at      TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS users (
+    id                   TEXT PRIMARY KEY,
+    username             TEXT UNIQUE NOT NULL,
+    pin_hash             TEXT NOT NULL,
+    encrypted_data_key   TEXT NOT NULL DEFAULT '',
+    key_nonce            TEXT NOT NULL DEFAULT '',
+    telegram_chat_id     TEXT,
+    link_code            TEXT,
+    link_code_expires    TEXT,
+    created_at           TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_telegram ON users(telegram_chat_id);
 """
 
 

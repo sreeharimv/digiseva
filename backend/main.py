@@ -2,17 +2,21 @@ import csv
 import io
 import logging
 import os
+import re
+import uuid
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query, UploadFile, File
+from fastapi import FastAPI, HTTPException, Query, Request, UploadFile, File, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from models import (
     Service, ServiceCreate, ServiceUpdate, PaymentRecord,
     Investment, InvestmentCreate, InvestmentUpdate,
+    UserCreate, UserLogin, TokenResponse,
 )
 from storage import (
     load_services,
@@ -32,6 +36,18 @@ from storage import (
     add_investment,
     update_investment,
     delete_investment,
+    create_user,
+    get_user_by_username,
+    get_user_by_id,
+    get_user_count,
+)
+from auth import (
+    hash_pin,
+    verify_pin,
+    create_access_token,
+    get_current_user,
+    is_rate_limited,
+    record_failed_attempt,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -91,6 +107,18 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="DigiSeva", lifespan=lifespan)
 
+# ---------------------------------------------------------------------------
+# CORS — allow GitHub Pages frontend to call the API via Cloudflare tunnel
+# ---------------------------------------------------------------------------
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://sreeharimv.github.io", "http://localhost:8200"],
+    allow_credentials=False,   # JWT in Authorization header, not cookies
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 # ---------------------------------------------------------------------------
 # Health check (used by tunnel monitor script)
@@ -99,6 +127,74 @@ app = FastAPI(title="DigiSeva", lifespan=lifespan)
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+
+INVITE_CODE = os.environ.get("INVITE_CODE", "")
+
+
+@app.post("/api/auth/register", response_model=TokenResponse, status_code=201)
+def register(data: UserCreate, request: Request):
+    # Validate PIN format
+    if not re.fullmatch(r"\d{6}", data.pin):
+        raise HTTPException(status_code=400, detail="PIN must be exactly 6 digits")
+
+    # Validate username
+    username = data.username.strip()
+    if not username or len(username) > 32:
+        raise HTTPException(status_code=400, detail="Username must be 1–32 characters")
+
+    # Check invite code (if configured)
+    if INVITE_CODE and data.invite_code != INVITE_CODE:
+        raise HTTPException(status_code=403, detail="Invalid invite code")
+
+    # Check duplicate username
+    if get_user_by_username(username):
+        raise HTTPException(status_code=409, detail="Username already taken")
+
+    user = {
+        "id":                  str(uuid.uuid4()),
+        "username":            username,
+        "pin_hash":            hash_pin(data.pin),
+        "encrypted_data_key":  "",   # Phase 3
+        "key_nonce":           "",   # Phase 3
+        "created_at":          datetime.now().isoformat(),
+    }
+    create_user(user)
+    token = create_access_token(user["id"], user["username"])
+    return TokenResponse(access_token=token, username=user["username"])
+
+
+@app.post("/api/auth/login", response_model=TokenResponse)
+def login(data: UserLogin, request: Request):
+    ip = request.client.host
+    if is_rate_limited(ip):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed attempts. Try again in 15 minutes."
+        )
+
+    user = get_user_by_username(data.username.strip())
+    if not user or not verify_pin(data.pin, user["pin_hash"]):
+        record_failed_attempt(ip)
+        raise HTTPException(status_code=401, detail="Invalid username or PIN")
+
+    token = create_access_token(user["id"], user["username"])
+    return TokenResponse(access_token=token, username=user["username"])
+
+
+@app.get("/api/auth/me")
+def me(current_user: dict = Depends(get_current_user)):
+    return {"user_id": current_user["user_id"], "username": current_user["username"]}
+
+
+@app.get("/api/auth/status")
+def auth_status():
+    """Returns whether any users exist — frontend uses this to show login vs register."""
+    return {"has_users": get_user_count() > 0}
 
 
 # ---------------------------------------------------------------------------

@@ -121,3 +121,24 @@ class SummaryResponse(BaseModel):
     overdue: list
     paid_count: int
     total_count: int
+
+
+# ---------------------------------------------------------------------------
+# Auth models
+# ---------------------------------------------------------------------------
+
+class UserCreate(BaseModel):
+    username: str
+    pin: str          # must be exactly 6 digits
+    invite_code: str = ""
+
+
+class UserLogin(BaseModel):
+    username: str
+    pin: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    username: str
