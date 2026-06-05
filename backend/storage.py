@@ -24,6 +24,7 @@ def _row_to_service(row) -> Service:
     d["auto_debit"] = bool(d["auto_debit"])
     d["paid_current_cycle"] = bool(d["paid_current_cycle"])
     d["active"] = bool(d["active"])
+    d.pop("user_id", None)   # internal field — not part of the Service model
     return Service(**d)
 
 
@@ -43,40 +44,41 @@ def _reset_overdue(conn) -> None:
 # CRUD
 # ---------------------------------------------------------------------------
 
-def load_services(include_inactive: bool = False) -> List[Service]:
-    """Load services from the database.
-
-    By default only active entries are returned. Pass include_inactive=True
-    to also include entries where active=0 (e.g. for CSV export or admin views).
-    """
+def load_services(user_id: str, include_inactive: bool = False) -> List[Service]:
+    """Load services for a specific user."""
     with get_db() as conn:
         _reset_overdue(conn)
         if include_inactive:
-            rows = conn.execute("SELECT * FROM services").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM services WHERE user_id = ?", (user_id,)
+            ).fetchall()
         else:
-            rows = conn.execute("SELECT * FROM services WHERE active = 1").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM services WHERE user_id = ? AND active = 1", (user_id,)
+            ).fetchall()
     return [_row_to_service(r) for r in rows]
 
 
-def get_service(service_id: str) -> Optional[Service]:
+def get_service(service_id: str, user_id: str) -> Optional[Service]:
     with get_db() as conn:
         _reset_overdue(conn)
         row = conn.execute(
-            "SELECT * FROM services WHERE id = ?", (service_id,)
+            "SELECT * FROM services WHERE id = ? AND user_id = ?", (service_id, user_id)
         ).fetchone()
     return _row_to_service(row) if row else None
 
 
-def add_service(service: Service) -> Service:
+def add_service(service: Service, user_id: str) -> Service:
     d = service.model_dump()
+    d["user_id"] = user_id
     with get_db() as conn:
         conn.execute("""
             INSERT INTO services (
-                id, name, type, category, amount, currency, cycle, next_due,
+                id, user_id, name, type, category, amount, currency, cycle, next_due,
                 payment_method, auto_debit, paid_current_cycle, notes, active, created_at,
                 tenure_months, paid_instalments, credit_limit, outstanding_balance, statement_amount
             ) VALUES (
-                :id, :name, :type, :category, :amount, :currency, :cycle, :next_due,
+                :id, :user_id, :name, :type, :category, :amount, :currency, :cycle, :next_due,
                 :payment_method, :auto_debit, :paid_current_cycle, :notes, :active, :created_at,
                 :tenure_months, :paid_instalments, :credit_limit, :outstanding_balance, :statement_amount
             )
@@ -84,39 +86,44 @@ def add_service(service: Service) -> Service:
     return service
 
 
-def update_service(service_id: str, updates: dict) -> Optional[Service]:
-    # Strip unknown columns and explicit None values (but keep False / 0 / "")
+def update_service(service_id: str, updates: dict, user_id: str) -> Optional[Service]:
     clean = {k: v for k, v in updates.items() if k in _UPDATABLE and v is not None}
     if not clean:
-        return get_service(service_id)
+        return get_service(service_id, user_id)
     set_clause = ", ".join(f"{k} = :{k}" for k in clean)
     clean["_id"] = service_id
+    clean["_uid"] = user_id
     with get_db() as conn:
-        conn.execute(f"UPDATE services SET {set_clause} WHERE id = :_id", clean)
+        conn.execute(
+            f"UPDATE services SET {set_clause} WHERE id = :_id AND user_id = :_uid", clean
+        )
         row = conn.execute(
-            "SELECT * FROM services WHERE id = ?", (service_id,)
+            "SELECT * FROM services WHERE id = ? AND user_id = ?", (service_id, user_id)
         ).fetchone()
     return _row_to_service(row) if row else None
 
 
-def delete_service(service_id: str) -> bool:
+def delete_service(service_id: str, user_id: str) -> bool:
     with get_db() as conn:
-        cursor = conn.execute("DELETE FROM services WHERE id = ?", (service_id,))
+        cursor = conn.execute(
+            "DELETE FROM services WHERE id = ? AND user_id = ?", (service_id, user_id)
+        )
     return cursor.rowcount > 0
 
 
-def save_services(services: List[Service]) -> None:
+def save_services(services: List[Service], user_id: str) -> None:
     """Bulk upsert — used by the CSV import endpoint."""
     with get_db() as conn:
         for s in services:
             d = s.model_dump()
+            d["user_id"] = user_id
             conn.execute("""
                 INSERT OR REPLACE INTO services (
-                    id, name, type, category, amount, currency, cycle, next_due,
+                    id, user_id, name, type, category, amount, currency, cycle, next_due,
                     payment_method, auto_debit, paid_current_cycle, notes, active, created_at,
                     tenure_months, paid_instalments, credit_limit, outstanding_balance, statement_amount
                 ) VALUES (
-                    :id, :name, :type, :category, :amount, :currency, :cycle, :next_due,
+                    :id, :user_id, :name, :type, :category, :amount, :currency, :cycle, :next_due,
                     :payment_method, :auto_debit, :paid_current_cycle, :notes, :active, :created_at,
                     :tenure_months, :paid_instalments, :credit_limit, :outstanding_balance, :statement_amount
                 )
@@ -127,28 +134,29 @@ def save_services(services: List[Service]) -> None:
 # Payment history (credit cards)
 # ---------------------------------------------------------------------------
 
-def add_payment_history(service_id: str, amount_paid: float, notes: str = "") -> dict:
+def add_payment_history(service_id: str, amount_paid: float, user_id: str, notes: str = "") -> dict:
     record = {
         "id": str(uuid.uuid4()),
         "service_id": service_id,
+        "user_id": user_id,
         "amount_paid": amount_paid,
         "paid_at": datetime.now().isoformat(),
         "notes": notes,
     }
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO payment_history (id, service_id, amount_paid, paid_at, notes) "
-            "VALUES (:id, :service_id, :amount_paid, :paid_at, :notes)",
+            "INSERT INTO payment_history (id, service_id, user_id, amount_paid, paid_at, notes) "
+            "VALUES (:id, :service_id, :user_id, :amount_paid, :paid_at, :notes)",
             record,
         )
     return record
 
 
-def get_payment_history(service_id: str) -> List[dict]:
+def get_payment_history(service_id: str, user_id: str) -> List[dict]:
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM payment_history WHERE service_id = ? ORDER BY paid_at DESC",
-            (service_id,),
+            "SELECT * FROM payment_history WHERE service_id = ? AND user_id = ? ORDER BY paid_at DESC",
+            (service_id, user_id),
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -256,11 +264,12 @@ def get_db_path() -> str:
 # Paid log (monthly payment history for all service types)
 # ---------------------------------------------------------------------------
 
-def add_paid_log(service: Service) -> None:
+def add_paid_log(service: Service, user_id: str) -> None:
     """Record a payment event when any service is marked as paid/received."""
     cycle_month = datetime.now().strftime("%Y-%m")
     record = {
         "id": str(uuid.uuid4()),
+        "user_id": user_id,
         "service_id": service.id,
         "service_name": service.name,
         "amount": service.amount,
@@ -271,14 +280,14 @@ def add_paid_log(service: Service) -> None:
     }
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO paid_log (id, service_id, service_name, amount, type, category, cycle_month, paid_at) "
-            "VALUES (:id, :service_id, :service_name, :amount, :type, :category, :cycle_month, :paid_at)",
+            "INSERT INTO paid_log (id, user_id, service_id, service_name, amount, type, category, cycle_month, paid_at) "
+            "VALUES (:id, :user_id, :service_id, :service_name, :amount, :type, :category, :cycle_month, :paid_at)",
             record,
         )
 
 
-def get_history_months() -> list:
-    """Return months that have log records, with income/outgo totals."""
+def get_history_months(user_id: str) -> list:
+    """Return months that have log records for a user, with income/outgo totals."""
     with get_db() as conn:
         rows = conn.execute("""
             SELECT cycle_month,
@@ -286,18 +295,19 @@ def get_history_months() -> list:
                    SUM(CASE WHEN type != 'income' THEN amount ELSE 0 END) AS total_outgo,
                    COUNT(*) AS count
             FROM paid_log
+            WHERE user_id = ?
             GROUP BY cycle_month
             ORDER BY cycle_month DESC
-        """).fetchall()
+        """, (user_id,)).fetchall()
     return [dict(r) for r in rows]
 
 
-def get_month_log(year_month: str) -> list:
-    """Return all paid_log records for a specific YYYY-MM month."""
+def get_month_log(year_month: str, user_id: str) -> list:
+    """Return all paid_log records for a specific YYYY-MM month for a user."""
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM paid_log WHERE cycle_month = ? ORDER BY type, paid_at",
-            (year_month,),
+            "SELECT * FROM paid_log WHERE cycle_month = ? AND user_id = ? ORDER BY type, paid_at",
+            (year_month, user_id),
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -313,49 +323,60 @@ _INV_UPDATABLE = {"name", "category", "current_value", "invested_amount",
 def _row_to_investment(row) -> dict:
     d = dict(row)
     d["active"] = bool(d["active"])
+    d.pop("user_id", None)   # internal field
     return d
 
 
-def load_investments() -> list:
+def load_investments(user_id: str) -> list:
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM investments WHERE active = 1 ORDER BY category, name"
+            "SELECT * FROM investments WHERE user_id = ? AND active = 1 ORDER BY category, name",
+            (user_id,)
         ).fetchall()
     return [_row_to_investment(r) for r in rows]
 
 
-def get_investment(inv_id: str) -> Optional[dict]:
+def get_investment(inv_id: str, user_id: str) -> Optional[dict]:
     with get_db() as conn:
-        row = conn.execute("SELECT * FROM investments WHERE id = ?", (inv_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM investments WHERE id = ? AND user_id = ?", (inv_id, user_id)
+        ).fetchone()
     return _row_to_investment(row) if row else None
 
 
-def add_investment(inv: dict) -> dict:
+def add_investment(inv: dict, user_id: str) -> dict:
+    inv["user_id"] = user_id
     with get_db() as conn:
         conn.execute("""
             INSERT INTO investments
-                (id, name, category, current_value, invested_amount,
+                (id, user_id, name, category, current_value, invested_amount,
                  institution, notes, active, last_updated, created_at)
             VALUES
-                (:id, :name, :category, :current_value, :invested_amount,
+                (:id, :user_id, :name, :category, :current_value, :invested_amount,
                  :institution, :notes, :active, :last_updated, :created_at)
         """, inv)
+    inv.pop("user_id", None)
     return inv
 
 
-def update_investment(inv_id: str, updates: dict) -> Optional[dict]:
+def update_investment(inv_id: str, updates: dict, user_id: str) -> Optional[dict]:
     clean = {k: v for k, v in updates.items() if k in _INV_UPDATABLE and v is not None}
     if clean:
         set_clause = ", ".join(f"{k} = :{k}" for k in clean)
         clean["_id"] = inv_id
+        clean["_uid"] = user_id
         with get_db() as conn:
-            conn.execute(f"UPDATE investments SET {set_clause} WHERE id = :_id", clean)
-    return get_investment(inv_id)
+            conn.execute(
+                f"UPDATE investments SET {set_clause} WHERE id = :_id AND user_id = :_uid", clean
+            )
+    return get_investment(inv_id, user_id)
 
 
-def delete_investment(inv_id: str) -> bool:
+def delete_investment(inv_id: str, user_id: str) -> bool:
     with get_db() as conn:
-        cursor = conn.execute("DELETE FROM investments WHERE id = ?", (inv_id,))
+        cursor = conn.execute(
+            "DELETE FROM investments WHERE id = ? AND user_id = ?", (inv_id, user_id)
+        )
     return cursor.rowcount > 0
 
 

@@ -77,10 +77,52 @@ CREATE INDEX IF NOT EXISTS idx_users_telegram ON users(telegram_chat_id);
 
 
 def init_db() -> None:
-    """Create tables if they don't exist."""
+    """Create tables and run incremental schema migrations."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     with get_db() as conn:
         conn.executescript(_SCHEMA)
+        _add_user_id_columns(conn)
+        _migrate_default_user_ids(conn)
+
+
+def _add_user_id_columns(conn) -> None:
+    """Phase 2: add user_id column to data tables (idempotent)."""
+    for table in ("services", "investments", "paid_log", "payment_history"):
+        try:
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default'"
+            )
+        except Exception:
+            pass  # column already exists — that's fine
+
+    conn.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_services_user      ON services(user_id);
+        CREATE INDEX IF NOT EXISTS idx_investments_user   ON investments(user_id);
+        CREATE INDEX IF NOT EXISTS idx_paid_log_user      ON paid_log(user_id);
+        CREATE INDEX IF NOT EXISTS idx_payment_hist_user  ON payment_history(user_id);
+    """)
+
+
+def _migrate_default_user_ids(conn) -> None:
+    """Phase 2: when there is exactly one registered user, assign all
+    'default' rows to that user.  Runs on every startup but is a no-op
+    once migration is complete."""
+    try:
+        user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        if user_count != 1:
+            return
+        default_count = conn.execute(
+            "SELECT COUNT(*) FROM services WHERE user_id = 'default'"
+        ).fetchone()[0]
+        if default_count == 0:
+            return
+        uid = conn.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
+        for table in ("services", "investments", "paid_log", "payment_history"):
+            conn.execute(
+                f"UPDATE {table} SET user_id = ? WHERE user_id = 'default'", (uid,)
+            )
+    except Exception:
+        pass  # users table may not exist yet on very first run
 
 
 @contextmanager

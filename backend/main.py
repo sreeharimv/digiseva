@@ -206,8 +206,10 @@ def list_services(
     type: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     include_inactive: bool = Query(False),
+    current_user: dict = Depends(get_current_user),
 ):
-    services = load_services(include_inactive=include_inactive)
+    uid = current_user["user_id"]
+    services = load_services(uid, include_inactive=include_inactive)
     if type:
         services = [s for s in services if s.type == type]
     if category:
@@ -216,23 +218,23 @@ def list_services(
 
 
 @app.post("/api/services", status_code=201)
-def create_service(data: ServiceCreate):
+def create_service(data: ServiceCreate, current_user: dict = Depends(get_current_user)):
     service = Service(**data.model_dump())
-    add_service(service)
+    add_service(service, current_user["user_id"])
     return service.model_dump()
 
 
 @app.put("/api/services/{service_id}")
-def edit_service(service_id: str, data: ServiceUpdate):
-    updated = update_service(service_id, data.model_dump(exclude_none=True))
+def edit_service(service_id: str, data: ServiceUpdate, current_user: dict = Depends(get_current_user)):
+    updated = update_service(service_id, data.model_dump(exclude_none=True), current_user["user_id"])
     if not updated:
         raise HTTPException(status_code=404, detail="Service not found")
     return updated.model_dump()
 
 
 @app.delete("/api/services/{service_id}")
-def remove_service(service_id: str):
-    if not delete_service(service_id):
+def remove_service(service_id: str, current_user: dict = Depends(get_current_user)):
+    if not delete_service(service_id, current_user["user_id"]):
         raise HTTPException(status_code=404, detail="Service not found")
     return {"ok": True}
 
@@ -242,28 +244,26 @@ def remove_service(service_id: str):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/services/{service_id}/paid")
-def toggle_paid(service_id: str):
-    service = get_service(service_id)
+def toggle_paid(service_id: str, current_user: dict = Depends(get_current_user)):
+    uid = current_user["user_id"]
+    service = get_service(service_id, uid)
     if not service:
         raise HTTPException(status_code=404, detail="Service not found")
 
     if service.paid_current_cycle:
-        # Untoggle — revert to unpaid for this cycle
-        updated = update_service(service_id, {"paid_current_cycle": False})
+        updated = update_service(service_id, {"paid_current_cycle": False}, uid)
     else:
         new_due = advance_next_due(service)
         extra: dict = {"paid_current_cycle": True, "next_due": new_due}
 
-        # EMI: track instalments; deactivate when tenure is complete
         if service.tenure_months is not None:
             new_paid = service.paid_instalments + 1
             extra["paid_instalments"] = new_paid
             if new_paid >= service.tenure_months:
                 extra["active"] = False
 
-        updated = update_service(service_id, extra)
-        # Write to paid log (only when marking as paid, not when untoggling)
-        add_paid_log(service)
+        updated = update_service(service_id, extra, uid)
+        add_paid_log(service, uid)
 
     return updated.model_dump()
 
@@ -273,40 +273,32 @@ def toggle_paid(service_id: str):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/services/{service_id}/payment")
-def record_payment(service_id: str, data: PaymentRecord):
-    """Record a payment against a credit card's outstanding balance.
-
-    If the payment amount covers the full statement_amount the entry is
-    automatically marked paid for this cycle and next_due is advanced.
-    """
-    service = get_service(service_id)
+def record_payment(service_id: str, data: PaymentRecord, current_user: dict = Depends(get_current_user)):
+    uid = current_user["user_id"]
+    service = get_service(service_id, uid)
     if not service:
         raise HTTPException(status_code=404, detail="Service not found")
     if service.category != "Credit Card":
-        raise HTTPException(
-            status_code=400,
-            detail="Payment recording is only supported for Credit Card entries",
-        )
+        raise HTTPException(status_code=400, detail="Payment recording is only supported for Credit Card entries")
 
     new_outstanding = max(0.0, service.outstanding_balance - data.amount)
     updates: dict = {"outstanding_balance": new_outstanding}
 
-    # Auto-mark paid when the full statement is settled
     if service.statement_amount > 0 and data.amount >= service.statement_amount:
         updates["paid_current_cycle"] = True
         updates["next_due"] = advance_next_due(service)
 
-    updated = update_service(service_id, updates)
-    add_payment_history(service_id, data.amount, data.notes)
-
+    updated = update_service(service_id, updates, uid)
+    add_payment_history(service_id, data.amount, uid, data.notes)
     return updated.model_dump()
 
 
 @app.get("/api/services/{service_id}/payment-history")
-def payment_history(service_id: str):
-    if not get_service(service_id):
+def payment_history(service_id: str, current_user: dict = Depends(get_current_user)):
+    uid = current_user["user_id"]
+    if not get_service(service_id, uid):
         raise HTTPException(status_code=404, detail="Service not found")
-    return get_payment_history(service_id)
+    return get_payment_history(service_id, uid)
 
 
 # ---------------------------------------------------------------------------
@@ -382,8 +374,8 @@ def _due_this_month(s: Service, today: date) -> bool:
 
 
 @app.get("/api/summary")
-def summary():
-    services = load_services()
+def summary(current_user: dict = Depends(get_current_user)):
+    services = load_services(current_user["user_id"])
     today = date.today()
     seven_days = today + timedelta(days=7)
 
@@ -459,8 +451,8 @@ _CSV_FIELDS = [
 
 
 @app.get("/api/export/csv")
-def export_csv():
-    services = load_services(include_inactive=True)  # full backup — include inactive
+def export_csv(current_user: dict = Depends(get_current_user)):
+    services = load_services(current_user["user_id"], include_inactive=True)
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(_CSV_FIELDS)
@@ -476,7 +468,8 @@ def export_csv():
 
 
 @app.post("/api/import/csv")
-async def import_csv(file: UploadFile = File(...)):
+async def import_csv(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
+    uid = current_user["user_id"]
     content = await file.read()
     try:
         text = content.decode("utf-8-sig")  # handle Excel BOM
@@ -488,7 +481,7 @@ async def import_csv(file: UploadFile = File(...)):
     if not required.issubset(set(reader.fieldnames or [])):
         raise HTTPException(status_code=400, detail=f"CSV must have columns: {required}")
 
-    services = load_services(include_inactive=True)  # must include inactive to avoid duplicate inserts
+    services = load_services(uid, include_inactive=True)
     existing_ids = {s.id for s in services}
 
     created, updated_count, skipped = 0, 0, 0
@@ -552,7 +545,7 @@ async def import_csv(file: UploadFile = File(...)):
             errors.append(f"Row {i}: {e}")
             skipped += 1
 
-    save_services(services)
+    save_services(services, uid)
     return {"created": created, "updated": updated_count, "skipped": skipped, "errors": errors}
 
 
@@ -561,15 +554,13 @@ async def import_csv(file: UploadFile = File(...)):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/history")
-def history_months():
-    """Return list of months with payment totals."""
-    return get_history_months()
+def history_months(current_user: dict = Depends(get_current_user)):
+    return get_history_months(current_user["user_id"])
 
 
 @app.get("/api/history/{year_month}")
-def history_month(year_month: str):
-    """Return all paid_log entries for a YYYY-MM month."""
-    return get_month_log(year_month)
+def history_month(year_month: str, current_user: dict = Depends(get_current_user)):
+    return get_month_log(year_month, current_user["user_id"])
 
 
 # ---------------------------------------------------------------------------
@@ -577,29 +568,30 @@ def history_month(year_month: str):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/investments")
-def list_investments_endpoint():
-    return load_investments()
+def list_investments_endpoint(current_user: dict = Depends(get_current_user)):
+    return load_investments(current_user["user_id"])
 
 
 @app.post("/api/investments", status_code=201)
-def create_investment(data: InvestmentCreate):
+def create_investment(data: InvestmentCreate, current_user: dict = Depends(get_current_user)):
     inv = Investment(**data.model_dump())
-    return add_investment(inv.model_dump())
+    return add_investment(inv.model_dump(), current_user["user_id"])
 
 
 @app.put("/api/investments/{inv_id}")
-def edit_investment(inv_id: str, data: InvestmentUpdate):
+def edit_investment(inv_id: str, data: InvestmentUpdate, current_user: dict = Depends(get_current_user)):
+    uid = current_user["user_id"]
     updates = data.model_dump(exclude_none=True)
     updates["last_updated"] = datetime.now().isoformat()
-    result = update_investment(inv_id, updates)
+    result = update_investment(inv_id, updates, uid)
     if not result:
         raise HTTPException(status_code=404, detail="Investment not found")
     return result
 
 
 @app.delete("/api/investments/{inv_id}")
-def remove_investment(inv_id: str):
-    if not delete_investment(inv_id):
+def remove_investment(inv_id: str, current_user: dict = Depends(get_current_user)):
+    if not delete_investment(inv_id, current_user["user_id"]):
         raise HTTPException(status_code=404, detail="Investment not found")
     return {"ok": True}
 
