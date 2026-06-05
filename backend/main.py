@@ -631,12 +631,12 @@ async def import_csv(file: UploadFile = File(...), current_user: dict = Depends(
 
 @app.get("/api/history")
 def history_months(current_user: dict = Depends(get_current_user)):
-    return get_history_months(current_user["user_id"])
+    return get_history_months(current_user["user_id"], data_key=current_user.get("data_key"))
 
 
 @app.get("/api/history/{year_month}")
 def history_month(year_month: str, current_user: dict = Depends(get_current_user)):
-    return get_month_log(year_month, current_user["user_id"])
+    return get_month_log(year_month, current_user["user_id"], data_key=current_user.get("data_key"))
 
 
 # ---------------------------------------------------------------------------

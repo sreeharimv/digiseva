@@ -484,10 +484,10 @@ def _build_investments(uid=None, dk=None) -> str:
 # /history
 # ---------------------------------------------------------------------------
 
-def _build_history(limit: int = 3, uid=None) -> str:
+def _build_history(limit: int = 3, uid=None, dk=None) -> str:
     from storage import get_history_months
-    if uid is None: uid, _ = _get_admin_context()
-    months = get_history_months(uid or '')
+    if uid is None: uid, dk = _get_admin_context()
+    months = get_history_months(uid or '', data_key=dk)
 
     if not months:
         return (
@@ -926,7 +926,7 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     uid, dk = _get_session(chat_id)
     if not uid:
         await _prompt_unlock(update, chat_id); return
-    await update.message.reply_text(_build_history(uid=uid), parse_mode="Markdown")
+    await update.message.reply_text(_build_history(uid=uid, dk=dk), parse_mode="Markdown")
 
 
 async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

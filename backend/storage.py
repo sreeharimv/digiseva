@@ -279,14 +279,17 @@ def get_linked_users() -> list:
     return [dict(row) for row in rows]
 
 
-def auto_mark_paid(user_id: Optional[str] = None) -> List[Service]:
+def auto_mark_paid(user_id: Optional[str] = None,
+                   data_key: Optional[bytes] = None) -> List[Service]:
     """Mark active auto-debit services as paid when their due date has arrived.
 
     If user_id is given, only that user's services are processed.
+    data_key is used to decrypt service fields and encrypt the paid_log entry.
     Returns the list of services just auto-marked (used in the morning notification).
     """
     today = date.today().isoformat()
     marked: List[Service] = []
+    to_log: list = []   # (service_with_real_fields, row_user_id)
 
     with get_db() as conn:
         if user_id:
@@ -303,7 +306,9 @@ def auto_mark_paid(user_id: Optional[str] = None) -> List[Service]:
             """, (today,)).fetchall()
 
         for row in rows:
-            s = _row_to_service(row)
+            row_uid = dict(row).get("user_id", user_id or "")
+            # Decrypt so we have real field values for the paid_log entry
+            s = _row_to_service(row, data_key=data_key)
             new_due = advance_next_due(s)
             updates: dict = {"paid_current_cycle": 1, "next_due": new_due}
 
@@ -321,7 +326,15 @@ def auto_mark_paid(user_id: Optional[str] = None) -> List[Service]:
             updated_row = conn.execute(
                 "SELECT * FROM services WHERE id = ?", (s.id,)
             ).fetchone()
-            marked.append(_row_to_service(updated_row))
+            marked.append(_row_to_service(updated_row, data_key=data_key))
+            to_log.append((s, row_uid))  # original `s` has the decrypted real fields
+
+    # Write paid_log entries AFTER the service transaction commits
+    for svc, uid in to_log:
+        try:
+            add_paid_log(svc, uid, data_key=data_key)
+        except Exception:
+            pass  # never let logging failure abort the auto-mark result
 
     return marked
 
@@ -358,30 +371,53 @@ def add_paid_log(service: Service, user_id: str, data_key: Optional[bytes] = Non
         )
 
 
-def get_history_months(user_id: str) -> list:
-    """Return months that have log records for a user, with income/outgo totals."""
+def _decrypt_paid_log_row(d: dict, data_key: Optional[bytes]) -> dict:
+    """Decrypt enc_data into the row dict if data_key is provided."""
+    if data_key and d.get("enc_data") and d.get("enc_nonce"):
+        try:
+            d.update(decrypt_fields(data_key, d["enc_data"], d["enc_nonce"]))
+        except Exception:
+            pass  # leave placeholders on failure
+    return d
+
+
+def get_history_months(user_id: str, data_key: Optional[bytes] = None) -> list:
+    """Return months that have log records for a user, with income/outgo totals.
+
+    Aggregation is done in Python after decryption — the plain `amount` column
+    is a 0.0 placeholder for encrypted rows, so SQL SUM would always return 0.
+    """
     with get_db() as conn:
-        rows = conn.execute("""
-            SELECT cycle_month,
-                   SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END)  AS total_income,
-                   SUM(CASE WHEN type != 'income' THEN amount ELSE 0 END) AS total_outgo,
-                   COUNT(*) AS count
-            FROM paid_log
-            WHERE user_id = ?
-            GROUP BY cycle_month
-            ORDER BY cycle_month DESC
-        """, (user_id,)).fetchall()
-    return [dict(r) for r in rows]
+        rows = conn.execute(
+            "SELECT * FROM paid_log WHERE user_id = ? ORDER BY cycle_month DESC",
+            (user_id,)
+        ).fetchall()
+
+    from collections import defaultdict
+    months: dict = defaultdict(lambda: {"total_income": 0.0, "total_outgo": 0.0, "count": 0})
+    for row in rows:
+        d = _decrypt_paid_log_row(dict(row), data_key)
+        m = d["cycle_month"]
+        amt = float(d.get("amount") or 0)
+        if d.get("type") == "income":
+            months[m]["total_income"] += amt
+        else:
+            months[m]["total_outgo"] += amt
+        months[m]["count"] += 1
+        months[m]["cycle_month"] = m
+
+    return sorted(months.values(), key=lambda x: x["cycle_month"], reverse=True)
 
 
-def get_month_log(year_month: str, user_id: str) -> list:
-    """Return all paid_log records for a specific YYYY-MM month for a user."""
+def get_month_log(year_month: str, user_id: str,
+                  data_key: Optional[bytes] = None) -> list:
+    """Return all paid_log records for a specific YYYY-MM month, decrypted."""
     with get_db() as conn:
         rows = conn.execute(
             "SELECT * FROM paid_log WHERE cycle_month = ? AND user_id = ? ORDER BY type, paid_at",
             (year_month, user_id),
         ).fetchall()
-    return [dict(r) for r in rows]
+    return [_decrypt_paid_log_row(dict(r), data_key) for r in rows]
 
 
 # ---------------------------------------------------------------------------

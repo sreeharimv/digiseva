@@ -65,7 +65,7 @@ def start_scheduler(bot_app, chat_id: str):
                     if not dk:
                         continue  # scheduler key not set for this user
 
-                    auto_marked = auto_mark_paid(user_id=uid)
+                    auto_marked = auto_mark_paid(user_id=uid, data_key=dk)
                     services    = load_services(uid, data_key=dk)
                     alert_msg   = get_alert_message(services)
 
