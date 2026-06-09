@@ -4,7 +4,6 @@
 # then does the actual URL detection + GitHub push in a background subshell.
 
 REPO=~/docker/digiseva
-URL_FILE="$REPO/tunnel-url.txt"
 LOG=~/digiseva-tunnel.log
 
 (
@@ -13,26 +12,33 @@ LOG=~/digiseva-tunnel.log
   # Poll user journal until we get a trycloudflare.com URL (up to 120s)
   TUNNEL_URL=""
   for i in $(seq 1 60); do
+    # tail -1 = most recent match (not oldest)
     TUNNEL_URL=$(journalctl --user -u digiseva-tunnel -n 100 --no-pager \
       | grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' \
       | grep -v 'api\.trycloudflare\.com' \
-      | head -1)
+      | tail -1)
     if [ -n "$TUNNEL_URL" ]; then
-      break
+      # Health check — make sure this URL actually resolves
+      if curl -sf --max-time 8 "$TUNNEL_URL/api/health" > /dev/null 2>&1; then
+        break
+      fi
     fi
+    TUNNEL_URL=""
     sleep 2
   done
 
   if [ -z "$TUNNEL_URL" ]; then
-    echo "[digiseva] ERROR: could not detect tunnel URL after 120s" >> "$LOG"
+    echo "[digiseva] ERROR: could not detect or verify tunnel URL after 120s" >> "$LOG"
     exit 1
   fi
 
-  echo "[digiseva] tunnel URL: $TUNNEL_URL" >> "$LOG"
+  echo "[digiseva] tunnel URL verified: $TUNNEL_URL" >> "$LOG"
 
-  # Push to GitHub so frontend can discover it
+  # Sync with remote before committing to avoid non-fast-forward rejections.
+  # fetch + reset is safer than pull --rebase when commits can arrive from other machines.
   cd "$REPO"
-  git pull --rebase origin master -q
+  git fetch origin -q
+  git reset --hard origin/master -q
 
   CURRENT=$(cat tunnel-url.txt 2>/dev/null | tr -d '[:space:]')
   if [ "$CURRENT" = "$TUNNEL_URL" ]; then
@@ -41,10 +47,15 @@ LOG=~/digiseva-tunnel.log
   fi
 
   echo "$TUNNEL_URL" > tunnel-url.txt
-  git add tunnel-url.txt
-  git commit -m "chore: update digiseva tunnel URL to $TUNNEL_URL"
-  git push origin master
-  echo "[digiseva] pushed new URL to GitHub" >> "$LOG"
+  echo "$TUNNEL_URL" > docs/tunnel-url.txt
+  git add tunnel-url.txt docs/tunnel-url.txt
+  git commit -m "chore: update digiseva tunnel URL to $TUNNEL_URL" -q
+  if git push origin master; then
+    echo "[digiseva] pushed new URL to GitHub" >> "$LOG"
+  else
+    echo "[digiseva] ERROR: git push failed — frontend may show stale URL" >> "$LOG"
+    exit 1
+  fi
 ) &
 
 disown
