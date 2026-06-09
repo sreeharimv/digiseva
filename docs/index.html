@@ -797,7 +797,7 @@ async function initAPIBase() {
     // Running outside LAN — fetch live tunnel URL from GitHub
     try {
       const r = await fetch(
-        'https://raw.githubusercontent.com/sreeharimv/digiseva/master/tunnel-url.txt?t=' + Date.now(),
+        'https://sreeharimv.github.io/digiseva/tunnel-url.txt?t=' + Date.now(),
         { cache: 'no-store' }
       );
       if (r.ok) API_BASE = (await r.text()).trim();
