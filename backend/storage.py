@@ -349,6 +349,10 @@ def get_db_path() -> str:
 # ---------------------------------------------------------------------------
 
 def add_paid_log(service: Service, user_id: str, data_key: Optional[bytes] = None) -> None:
+    # Refuse to log placeholder data — the service wasn't decrypted (no PIN in session).
+    # Better to have no history entry than a permanently-wrong one.
+    if service.name == "•••":
+        return
     cycle_month = datetime.now().strftime("%Y-%m")
     record: dict = {
         "id":           str(uuid.uuid4()),
@@ -643,6 +647,21 @@ def migrate_encrypt_user_data(user_id: str, data_key: bytes) -> int:
         ).fetchall()
         for row in rows:
             d = dict(row)
+            # If the plain columns still hold placeholder values, look up the real
+            # service data so we don't encrypt garbage into the history permanently.
+            if d.get("service_name") == "•••":
+                svc_row = conn.execute(
+                    "SELECT * FROM services WHERE id = ?", (d["service_id"],)
+                ).fetchone()
+                if svc_row:
+                    svc = _row_to_service(svc_row, data_key=data_key)
+                    if svc.name != "•••":
+                        d["service_name"] = svc.name
+                        d["amount"]       = svc.amount
+                        d["category"]     = svc.category
+                # If we still can't get real data, skip this entry — don't cement placeholders.
+                if d.get("service_name") == "•••":
+                    continue
             payload = {k: d[k] for k in _SENS_PAID_LOG if k in d and d[k] is not None}
             enc_data, enc_nonce = encrypt_fields(data_key, payload)
             ph = {k: _PLACEHOLDERS.get(k, d[k]) for k in _SENS_PAID_LOG if k in d}
